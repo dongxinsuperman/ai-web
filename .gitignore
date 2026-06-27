@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ruff_cache/
+
+# 环境与运行数据
+.env
+backend/.env
+backend/data/
+data/
+
+# Node / 前端
+node_modules/
+dist/
+.vite/
+
+# 系统
+.DS_Store

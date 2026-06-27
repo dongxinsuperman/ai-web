@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>批次汇总 · {{ submission.name or submission.id }}</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.55; }
+a { color: #60a5fa; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+.hd { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 18px 22px; margin-bottom: 16px; }
+.hd h1 { font-size: 20px; color: #f8fafc; font-weight: 600; }
+.hd .sub { color: #94a3b8; font-size: 13px; margin-top: 6px; }
+.counts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.chip { background: #334155; padding: 4px 12px; border-radius: 6px; font-size: 12px; color: #cbd5e1; font-family: ui-monospace, Menlo, monospace; }
+.chip b { color: #f8fafc; }
+table { width: 100%; border-collapse: collapse; background: #0a1120; border: 1px solid #1e293b; border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #111c30; font-size: 13px; }
+th { background: #1e293b; color: #94a3b8; font-weight: 600; }
+td { color: #cbd5e1; }
+.badge { display: inline-flex; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+.badge.success { background: #064e3b; color: #6ee7b7; border: 1px solid #047857; }
+.badge.failed { background: #7f1d1d; color: #fca5a5; border: 1px solid #b91c1c; }
+.badge.cancelled { background: #374151; color: #d1d5db; border: 1px solid #4b5563; }
+.foot { text-align: center; color: #475569; font-size: 11px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <h1>{{ submission.name or submission.id }}</h1>
+    <div class="sub">批次 ID · {{ submission.id }} · 状态 {{ submission.state }}</div>
+    <div class="counts">
+      <span class="chip"><b>{{ counts.get('success',0) }}</b> 成功</span>
+      <span class="chip"><b>{{ counts.get('failed',0) }}</b> 失败</span>
+      <span class="chip"><b>{{ counts.get('cancelled',0) }}</b> 取消</span>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>caseId</th><th>名称</th><th>状态</th><th>报告</th></tr></thead>
+    <tbody>
+    {% for it in items %}
+      <tr>
+        <td><code>{{ it.case_id }}</code></td>
+        <td>{{ it.case_name }}</td>
+        <td><span class="badge {{ it.state }}">{{ it.state }}</span></td>
+        <td>{% if it.report_url %}<a href="{{ it.report_url }}" target="_blank">查看 →</a>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="foot">AI Web 批次汇总 · 生成于 {{ now }}</div>
+</div>
+</body>
+</html>

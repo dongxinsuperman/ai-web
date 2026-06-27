@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{{ item.case_name or item.case_id }} · AI Web 报告</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.55; }
+a { color: #60a5fa; }
+code { font-family: ui-monospace, Menlo, monospace; color: #a5f3fc; }
+.single-container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+.hd { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 18px 22px; margin-bottom: 16px; }
+.hd-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.hd-title h1 { font-size: 20px; color: #f8fafc; font-weight: 600; }
+.hd-title .sub { color: #64748b; font-size: 13px; font-weight: 400; }
+.hd-meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: #94a3b8; align-items: center; }
+.chip { background: #334155; padding: 4px 12px; border-radius: 6px; font-family: ui-monospace, Menlo, monospace; color: #cbd5e1; }
+.chip b { color: #94a3b8; font-weight: 500; margin-right: 6px; }
+.badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; letter-spacing: .3px; white-space: nowrap; }
+.badge.lg { font-size: 12px; padding: 4px 14px; }
+.badge-success { background: #064e3b; color: #6ee7b7; border: 1px solid #047857; }
+.badge-failed { background: #7f1d1d; color: #fca5a5; border: 1px solid #b91c1c; }
+.badge-other { background: #78350f; color: #fcd34d; border: 1px solid #b45309; }
+.section { margin-top: 18px; }
+.section-title { font-size: 13px; color: #cbd5e1; font-weight: 600; letter-spacing: .4px; margin-bottom: 8px; display: flex; gap: 8px; align-items: baseline; }
+.section-title .hint { font-size: 11px; color: #64748b; font-weight: 400; }
+.runcontent { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px 14px; font-size: 13px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
+.reason { margin-top: 12px; border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+.reason.success { background: #052e23; color: #6ee7b7; border: 1px solid #047857; }
+.reason.failed { background: #450a0a; color: #fca5a5; border: 1px solid #b91c1c; }
+.reason.needs_human { background: #422006; color: #fcd34d; border: 1px solid #b45309; }
+.timeline { background: #0a1120; border: 1px solid #1e293b; border-radius: 10px; padding: 8px 0; }
+.tl-row { padding: 6px 16px; }
+.tl-row + .tl-row { border-top: 1px solid #111c30; }
+.tl-body { background: #1e293b; border: 1px solid #334155; border-left: 3px solid #60a5fa; border-radius: 8px; padding: 12px 14px; margin: 4px 0; }
+.tl-body.t-finished { border-left-color: #34d399; }
+.tl-body.t-failed { border-left-color: #f87171; }
+.tl-body.t-meta { border-left-color: #a78bfa; }
+.tl-hd { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #cbd5e1; margin-bottom: 8px; flex-wrap: wrap; }
+.tl-idx { color: #60a5fa; font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+.tl-tag { background: #1e3a8a; color: #bfdbfe; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-family: ui-monospace, Menlo, monospace; }
+.tl-tag.t-finished { background: #064e3b; color: #6ee7b7; }
+.tl-tag.t-failed { background: #7f1d1d; color: #fca5a5; }
+.tl-tag.t-meta { background: #3b0764; color: #ddd6fe; }
+.tl-elapsed { color: #fbbf24; font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.tl-thought { background: #0f172a; border-left: 3px solid #fbbf24; border-radius: 4px; padding: 8px 12px; font-size: 13px; color: #e2e8f0; white-space: pre-wrap; word-break: break-word; margin-bottom: 8px; }
+.tl-action { background: #0f172a; border-left: 3px solid #60a5fa; border-radius: 4px; padding: 8px 12px; font-size: 12px; color: #a5f3fc; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; margin-bottom: 10px; }
+.tl-shots { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tl-shot h5 { font-size: 11px; color: #94a3b8; margin-bottom: 4px; font-weight: 500; }
+.tl-shot img { width: 100%; border-radius: 6px; border: 1px solid #334155; cursor: zoom-in; background: #000; max-height: 520px; object-fit: contain; object-position: top; }
+.tl-shot img:hover { opacity: .92; }
+.tl-shot .no-img { background: #0f172a; border: 1px dashed #334155; border-radius: 6px; padding: 28px; text-align: center; color: #475569; font-size: 12px; font-style: italic; }
+.foot { text-align: center; color: #475569; font-size: 11px; margin-top: 28px; padding-bottom: 16px; }
+.modal { display: none; position: fixed; z-index: 9999; inset: 0; background: rgba(0,0,0,.92); justify-content: center; align-items: center; }
+.modal.on { display: flex; }
+.modal img { max-width: 95%; max-height: 95%; border-radius: 6px; }
+.modal-tip { position: absolute; bottom: 24px; color: #94a3b8; font-size: 12px; background: rgba(0,0,0,.6); padding: 6px 14px; border-radius: 4px; }
+@media (max-width: 720px) { .tl-shots { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="single-container">
+  <div class="hd">
+    <div class="hd-title">
+      <h1>{{ item.case_name or item.case_id or "未命名任务" }}</h1>
+      <span class="sub">· {{ item.platform or "chrome" }}</span>
+      <span class="badge lg {{ 'badge-success' if run.state == 'success' else ('badge-failed' if run.state == 'failed' else 'badge-other') }}">{{ state_label }}</span>
+    </div>
+    <div class="hd-meta">
+      <span class="chip"><b>caseId</b>{{ item.case_id }}</span>
+      <span class="chip"><b>步数</b>{{ run.steps }}</span>
+      <span class="chip"><b>耗时</b>{{ '%.1f'|format((run.elapsed_ms or 0)/1000) }}s</span>
+      <span class="chip"><b>token</b>{{ tok.total_tokens }}（命中 {{ tok.cached_tokens }}）</span>
+      <span class="chip"><b>分段</b>{{ segments }}</span>
+      <span class="chip"><b>runId</b>{{ run.id }}</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">执行指令<span class="hint">runContent</span></div>
+    <div class="runcontent">{{ item.run_content }}</div>
+    {% if run.fail_reason or finish_content %}
+    <div class="reason {{ run.state }}">{{ finish_content or run.fail_reason }}</div>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <div class="section-title">运行时间线<span class="hint">共 {{ steps|length }} 步</span></div>
+    <div class="timeline">
+      {% for s in steps %}
+      {% set t = 't-finished' if s.action == 'finished' else ('t-failed' if s.action == 'assert_fail' else ('t-meta' if s.action in ['通道判定','二次断言'] else '')) %}
+      <div class="tl-row">
+        <div class="tl-body {{ t }}">
+          <div class="tl-hd">
+            <span class="tl-idx">步骤 #{{ s.step_no }}</span>
+            <span class="tl-tag {{ t }}">{{ s.action }}</span>
+            {% if s.elapsed_ms %}<span class="tl-elapsed">耗时 {{ s.elapsed_ms }}ms</span>{% endif %}
+            {% if s.token_usage and s.token_usage.get('total_tokens') %}<span class="tl-elapsed">tok {{ s.token_usage.get('total_tokens') }}</span>{% endif %}
+          </div>
+          {% if s.thought %}<div class="tl-thought"><b style="color:#fbbf24;margin-right:6px;">思考</b>{{ s.thought }}</div>{% endif %}
+          {% if s.action_raw %}<div class="tl-action"><b style="color:#60a5fa;margin-right:6px;">动作</b>{{ s.action_raw }}</div>{% endif %}
+          {% if s.screenshot_before or s.screenshot_after %}
+          <div class="tl-shots">
+            <div class="tl-shot"><h5>操作前</h5>{% if s.screenshot_before %}<img src="{{ s.screenshot_before }}" onclick="_z(this.src)" loading="lazy"/>{% else %}<div class="no-img">无截图</div>{% endif %}</div>
+            <div class="tl-shot"><h5>操作后</h5>{% if s.screenshot_after %}<img src="{{ s.screenshot_after }}" onclick="_z(this.src)" loading="lazy"/>{% else %}<div class="no-img">无截图</div>{% endif %}</div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="foot">AI Web 报告 · 生成于 {{ now }}</div>
+</div>
+<div class="modal" id="ZM" onclick="this.classList.remove('on')"><img alt="zoom"/><div class="modal-tip">点击任意位置关闭</div></div>
+<script>
+function _z(src){var m=document.getElementById('ZM');m.querySelector('img').src=src;m.classList.add('on');}
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){document.getElementById('ZM').classList.remove('on');}});
+</script>
+</body>
+</html>

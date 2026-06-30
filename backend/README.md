@@ -79,4 +79,6 @@ python tools/probe_actions.py
 
 > 默认端口 8009（避开本机其他服务）。如需改端口，调 `.env` 的 `AIWEB_PORT` 与 `AIWEB_PUBLIC_BASE_URL`，并同步 `web/vite.config.js` 代理目标。
 
+`AIWEB_PUBLIC_BASE_URL` 是 Server 生成 `reportUrl` / `summaryReportUrl` / 素材 URL 的公开基址。Agent 只负责执行和回传截图，不生成报告链接；测试/生产环境必须把它配置成调用方和浏览器可访问的 AI Web Server 地址，不能保留默认 `http://127.0.0.1:8009`。
+
 鉴权：默认匿名；设置 `AIWEB_API_TOKEN` 后所有 `/api` 需带 `Authorization: Bearer <token>`，Agent 启动时也要传 `--token`。

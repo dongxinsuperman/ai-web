@@ -99,6 +99,7 @@ class Settings(BaseSettings):
 
     # 存储
     storage_dir: str = "./data"
+    # Server 生成报告 / 素材的公开访问 URL。部署环境必须显式配置，避免返回 127.0.0.1。
     public_base_url: str = "http://127.0.0.1:8009"
 
     # Webhook

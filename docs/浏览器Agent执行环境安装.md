@@ -23,6 +23,7 @@ Server 不再为了主任务执行承担浏览器镜像重量。Server 核心只
 - VLM 配置。
 - Agent WebSocket 接入。
 - 报告 / 素材存储。
+- `AIWEB_PUBLIC_BASE_URL`：生成报告 / 素材公开 URL 的 Server 地址。
 
 Agent 必须具备：
 
@@ -81,6 +82,15 @@ python -m pip install -e .
 cp .env.example .env
 python -m aiweb.main
 ```
+
+启动前必须检查 `.env`：
+
+```env
+# 本地开发可保留 127.0.0.1；测试/生产必须改成外部可访问域名。
+AIWEB_PUBLIC_BASE_URL=http://127.0.0.1:8009
+```
+
+这个值只配在 Server 上。报告 HTML、截图、素材链接都由 Server 按这个基址生成；Agent 不生成报告链接，Case Flow 也不会替 Server 修正 `127.0.0.1`。
 
 如果 Server 设置了 `AIWEB_API_TOKEN`，Agent 启动时也要带同一个 token。
 

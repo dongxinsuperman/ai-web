@@ -1,16 +1,13 @@
-"""单任务执行：建 run → 起浏览器 context → 跑内核 → 落步骤 → 出报告 → 回调。"""
+"""单任务执行生命周期：建 run → 接收 Agent 步骤 → 出报告 → 回调。"""
 from __future__ import annotations
 
 import logging
-import time
 import base64
 
 from sqlalchemy import select
 
 from aiweb import sites as SITES
 from aiweb.db import session_scope
-from aiweb.kernel.browser import browser_manager
-from aiweb.kernel.runner import WebVLMRunner
 from aiweb.models.config import ConfigKV
 from aiweb.models.item import (ITEM_CANCELLED, ITEM_FAILED, ITEM_QUEUED, ITEM_RUNNING, ITEM_SUCCESS, Item)
 from aiweb.models.run import RUN_FAILED, RUN_RUNNING, RUN_SUCCESS, Run, RunStep
@@ -77,66 +74,6 @@ async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
     # login_api 可能访问外部系统，放在 DB session 外执行。
     payload["storageState"] = await SITES.build_auth_storage_state(matched_sites)
     return payload
-
-
-async def run_item(item_id: str) -> None:
-    payload = await create_run_for_item(item_id, claimed_by=get_settings().pod_id)
-    if not payload:
-        return
-
-    result, elapsed_ms = await execute_browser_payload(payload, resolve_asset=get_storage().resolve_asset)
-    await finalize_run(payload["runId"], result, elapsed_ms=elapsed_ms)
-
-
-async def execute_browser_payload(payload: dict, *, resolve_asset) -> tuple["_FakeResult", int]:
-    t0 = time.time()
-    step_counter = {"n": 0}
-    run_id = payload["runId"]
-    item_id = payload["itemId"]
-
-    async def persist_step(step: dict) -> None:
-        step_counter["n"] = int(step.get("step_no") or step_counter["n"])
-        await persist_run_step(run_id, step)
-
-    async def heartbeat() -> None:
-        await heartbeat_run(run_id)
-
-    async def should_cancel() -> bool:
-        return await should_cancel_item(item_id)
-
-    browser = None
-    context = None
-    try:
-        browser = await browser_manager.launch(bool(payload.get("headless")), payload.get("platform") or "chrome")
-        context = await browser_manager.new_context(browser, storage_state=payload.get("storageState"))
-        page = await context.new_page()
-        runner = WebVLMRunner(context, page, resolve_asset)
-        result = await runner.run(
-            payload.get("runContent") or "",
-            has_assets=bool(payload.get("assets")),
-            function_map_context=payload.get("functionMapContext"),
-            site_directory=payload.get("siteDirectory"),
-            on_step=persist_step,
-            on_heartbeat=heartbeat,
-            should_cancel=should_cancel,
-        )
-    except Exception as e:  # 内核外层兜底
-        logger.exception("worker 执行异常 item=%s", item_id)
-        result = _failed_result(step_counter["n"], f"worker 异常: {e}")
-    finally:
-        if context is not None:
-            try:
-                await context.close()
-            except Exception:
-                pass
-        if browser is not None:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-
-    elapsed_ms = int((time.time() - t0) * 1000)
-    return result, elapsed_ms
 
 
 def _image_bytes(payload: dict, key: str) -> bytes | None:

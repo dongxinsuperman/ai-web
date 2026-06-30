@@ -10,7 +10,7 @@ Agent 模式下，主任务执行链路变成：
 
 ```text
 Server 接收任务、排队、分发、生成报告
-Agent 接收任务、本机启动浏览器、执行步骤、回传截图和结果
+Agent 接收任务、本机启动浏览器、执行步骤、验证登录态、回传截图和结果
 Web 展示队列、报告和节点容量
 ```
 
@@ -28,6 +28,7 @@ Agent 必须具备：
 
 - Python 3.11+。
 - `aiweb` Python 包依赖。
+- `aiweb[agent]` 可选依赖。
 - Playwright 浏览器二进制。
 - 对应系统依赖。
 - 如果使用有头模式，需要可显示的桌面环境。
@@ -36,32 +37,40 @@ Agent 必须具备：
 
 | 角色 | 是否需要装浏览器二进制 | 说明 |
 |---|---:|---|
-| Server | 核心任务不需要 | 负责 API、队列、派发、报告、Webhook。主任务不会在 Server 本机拉浏览器。 |
+| Server | 不需要 | 负责 API、队列、派发、报告、Webhook。不会在 Server 本机拉浏览器。 |
 | Web | 不需要 | 只是 Vue 管理台。 |
-| Agent | 必须 | 真正执行 Playwright 浏览器任务。 |
+| Agent | 必须 | 真正执行 Playwright 浏览器任务，也负责登录态页面验证。 |
 
 Server 的推荐策略：
 
 ```text
-只跑任务派发：不装浏览器。
-还要做免登探测/校验：只装 Chromium。
-不要在 Server 装 Firefox / WebKit，它们应该放在 Agent。
+不装 Playwright 浏览器二进制。
+不启动浏览器驱动。
+不做登录态页面探测。
+所有需要打开页面的动作都发给 Agent。
 ```
 
-注意：当前 Server 里仍有“站点 / 免登”的配置期辅助接口会本地拉浏览器：
+当前保留的“站点 / 免登”配置期能力：
 
-- `POST /api/sites/record/start`
 - `POST /api/sites/verify-auth`
 - `POST /api/sites/compile-auth`
 
-如果你要在 Server 上继续使用这些配置期功能，Server 只需要安装 Chromium 即可，不需要安装 Firefox / WebKit。
-其中 `verify-auth` / `compile-auth` 可以用无头 Chromium 做探测；`record/start` 是有头手工录制，仍需要显示器环境。
+这两个接口仍由 Server 暴露，但页面打开验证由 Agent 完成。Server 只负责：
 
-如果只跑 case-flow / 提交任务 / 查看报告，浏览器环境只需要装在 Agent。
+- 生成 / 执行登录 API 配方。
+- 把 cookies / localStorage 发给 Agent。
+- 接收 Agent 返回的 `finalUrl` / `title` / 打开错误。
+- 判断登录态是否有效。
+
+录制登录态接口已删除：
+
+- `POST /api/sites/record/start`
+- `POST /api/sites/record/save`
+- `POST /api/sites/record/cancel`
 
 ## 3. Server 安装
 
-Server 不需要执行 `python -m playwright install ...` 才能承接主任务派发。
+Server 不需要执行 `python -m playwright install ...`，也不需要安装 `aiweb[agent]`。
 
 ```bash
 cd /Users/dongxin/代码文件/ai-web/aiweb/backend
@@ -73,18 +82,6 @@ cp .env.example .env
 python -m aiweb.main
 ```
 
-如果 Server 还要使用免登探测/校验，额外只装 Chromium：
-
-```bash
-python -m playwright install chromium
-```
-
-Linux Server 如果缺系统依赖：
-
-```bash
-python -m playwright install --with-deps chromium
-```
-
 如果 Server 设置了 `AIWEB_API_TOKEN`，Agent 启动时也要带同一个 token。
 
 ## 4. macOS Agent 安装
@@ -94,7 +91,7 @@ cd /Users/dongxin/代码文件/ai-web/aiweb/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e .
+python -m pip install -e ".[agent]"
 python -m playwright install chromium firefox webkit
 ```
 
@@ -120,7 +117,7 @@ cd C:\ai-web\aiweb\backend
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
-python -m pip install -e .
+python -m pip install -e ".[agent]"
 python -m playwright install chromium firefox webkit
 ```
 
@@ -148,7 +145,7 @@ cd /opt/aiweb/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
-python -m pip install -e .
+python -m pip install -e ".[agent]"
 python -m playwright install --with-deps chromium firefox webkit
 ```
 
@@ -281,8 +278,8 @@ Agent 模式稳定后，建议拆成两个镜像：
 ```text
 aiweb-server
   轻量镜像
-  默认不内置浏览器二进制
-  如果要保留免登探测，只内置 Chromium
+  不内置浏览器二进制
+  不安装 aiweb[agent]
   只跑 API、队列、派发、报告
 
 aiweb-agent
@@ -309,13 +306,7 @@ Agent 分支应该像这样：
 Server 只做调度和报告
 Windows Agent 自己装 Chrome / Firefox / WebKit 运行环境
 任务派给 Windows Agent 后，由 Windows Agent 开浏览器执行
+登录态验证也派给 Windows Agent，由 Windows Agent 打开页面确认
 ```
 
 所以你的理解是对的：主任务执行所需的浏览器环境，应由 Agent 自己安装和维护。
-
-Server 如果还需要探测免登，只补一个 Chromium 即可。它的角色类似：
-
-```text
-Server 偶尔用 Chromium 验证登录态是否有效
-Agent 才负责真正跑 Chrome / Firefox / WebKit 任务
-```

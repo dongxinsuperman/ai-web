@@ -1,6 +1,6 @@
 # AI Web 后端
 
-FastAPI + Playwright + PostgreSQL 实现的自然语言驱动 Web 自动化执行中台。
+FastAPI + PostgreSQL + Browser Agent 实现的自然语言驱动 Web 自动化执行中台。
 设计文档见上级 `docs/`。
 
 ## 本地运行
@@ -16,18 +16,14 @@ cp .env.example .env      # 填写 AIWEB_DATABASE_URL 与 AIWEB_VLM_*
 python -m aiweb.main      # 启动 Server，默认 :8009
 ```
 
-启动时自动建表（`create_all`）、启动调度器与心跳回收器。浏览器执行由独立 Agent 负责。
-主任务执行不要求 Server 安装 Playwright 浏览器二进制；Agent 机器需要安装浏览器环境。
-如果 Server 还要使用站点免登探测/校验，只额外安装 Chromium 即可，不需要安装 Firefox / WebKit。
-
-```bash
-python -m playwright install chromium
-```
+启动时自动建表（`create_all`）、启动调度器与心跳回收器。浏览器执行、登录态页面验证都由独立 Agent 负责。
+Server 不安装 Playwright 浏览器二进制，也不启动浏览器驱动。
 
 Agent 分支需要另起一个 Agent；本机测试示例：
 
 ```bash
 cd backend
+python -m pip install -e ".[agent]"
 python -m playwright install chromium firefox webkit
 .venv/bin/python -m aiweb.agent --server http://127.0.0.1:8009 --agent-id mac-01
 ```
@@ -66,7 +62,7 @@ python tools/probe_actions.py
 |---|---|
 | `aiweb/api/` | 投递 / 查询 / 取消 / 素材 / 配置 路由 |
 | `aiweb/scheduler/` | 队列领取（SKIP LOCKED）/ 并发调度 / worker / 心跳回收 |
-| `aiweb/kernel/` | VLM 决策循环 + 动作解析/别名 + Playwright 执行 + 上下文缓存 |
+| `aiweb/kernel/` | VLM 决策循环 + 动作解析/别名 + Playwright 执行内核（由 Agent 进程使用） |
 | `aiweb/report/` | 自包含 HTML 报告 |
 | `aiweb/webhook/` | 终态回调 |
 | `aiweb/storage/` | 截图 / 报告 / 素材 存储（本地卷） |

@@ -72,11 +72,8 @@
 
         <el-form-item v-if="form.authType==='storage_state'" label="登录态">
           <div style="width:100%">
-            <el-button type="success" :loading="recording" @click="startRecord">录制登录态（弹浏览器手动登）</el-button>
-            <el-button v-if="recordToken" type="primary" @click="saveRecord">我已登录完成，保存登录态</el-button>
-            <el-button v-if="recordToken" @click="cancelRecord">取消录制</el-button>
-            <div class="hint" style="margin:6px 0">点【录制】后会弹出一个浏览器，在里面手动登录该网站，登完回来点【保存登录态】。下方会填入 JSON。</div>
-            <el-input v-model="payloadText" type="textarea" :rows="6" placeholder='storageState JSON（录制后自动填入，也可手动粘贴）' />
+            <div class="hint" style="margin:6px 0">手动粘贴 Playwright storageState JSON。推荐优先使用登录接口 login_api，运行时动态现取登录态。</div>
+            <el-input v-model="payloadText" type="textarea" :rows="6" placeholder='storageState JSON，例如 {"cookies":[],"origins":[]}' />
           </div>
         </el-form-item>
 
@@ -105,9 +102,7 @@ const rows = ref([]);
 const loading = ref(false);
 const visible = ref(false);
 const saving = ref(false);
-const recording = ref(false);
 const working = ref(false);
-const recordToken = ref("");
 const payloadText = ref("");
 const descText = ref("");
 const form = ref({ id: "", name: "", keywords: "", url: "", authType: "none", enabled: true });
@@ -123,7 +118,6 @@ function openCreate() {
   form.value = { id: "", name: "", keywords: "", url: "", authType: "none", enabled: true };
   payloadText.value = "";
   descText.value = "";
-  recordToken.value = "";
   visible.value = true;
 }
 
@@ -136,7 +130,6 @@ function openEdit(row) {
     payloadText.value = row.authPayload && Object.keys(row.authPayload).length ? JSON.stringify(row.authPayload, null, 2) : "";
     descText.value = "";
   }
-  recordToken.value = "";
   visible.value = true;
 }
 
@@ -172,36 +165,6 @@ async function buildOrTest() {
   } finally {
     working.value = false;
   }
-}
-
-async function startRecord() {
-  if (!form.value.url) { ElMessage.warning("请先填网址"); return; }
-  recording.value = true;
-  try {
-    const res = await api.recordStart(form.value.url);
-    recordToken.value = res.data.recordToken;
-    ElMessage.success("已弹出浏览器，请在其中手动登录，完成后点【保存登录态】");
-  } catch (e) {
-    ElMessage.error("启动录制失败：" + (e.response?.data?.detail || e.message));
-  } finally {
-    recording.value = false;
-  }
-}
-
-async function saveRecord() {
-  try {
-    const res = await api.recordSave(recordToken.value);
-    payloadText.value = JSON.stringify({ storage_state: res.data.storageState }, null, 2);
-    recordToken.value = "";
-    ElMessage.success("登录态已捕获并填入下方，记得点保存");
-  } catch (e) {
-    ElMessage.error("保存登录态失败：" + (e.response?.data?.detail || e.message));
-  }
-}
-
-async function cancelRecord() {
-  try { await api.recordCancel(recordToken.value); } catch (e) { /* ignore */ }
-  recordToken.value = "";
 }
 
 async function submit() {

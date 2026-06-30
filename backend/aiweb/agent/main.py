@@ -117,6 +117,11 @@ class BrowserAgent:
                     ev = self.cancel_events.get(msg.get("runId"))
                     if ev:
                         ev.set()
+                elif msg_type == "auth_check":
+                    request_id = msg.get("requestId")
+                    if not request_id:
+                        continue
+                    asyncio.create_task(self._auth_check(ws, msg), name=f"agent-auth-check-{request_id}")
 
     async def _run_one(self, ws, payload: dict) -> None:
         run_id = payload["runId"]
@@ -179,6 +184,50 @@ class BrowserAgent:
             self.cancel_events.pop(run_id, None)
             if asset_root:
                 shutil.rmtree(asset_root, ignore_errors=True)
+
+    async def _auth_check(self, ws, payload: dict) -> None:
+        request_id = payload["requestId"]
+        browser = None
+        context = None
+        try:
+            url = payload.get("url")
+            if not url:
+                raise ValueError("url required")
+            browser = await browser_manager.launch(bool(payload.get("headless", True)), payload.get("platform") or "chrome")
+            context = await browser_manager.new_context(browser, storage_state=payload.get("storageState"))
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=int(payload.get("networkIdleTimeoutMs") or 4000))
+            except Exception:
+                pass
+            await self._send(ws, {
+                "type": "auth_check_done",
+                "requestId": request_id,
+                "opened": True,
+                "finalUrl": page.url,
+                "title": await page.title(),
+            })
+        except Exception as exc:
+            await self._send(ws, {
+                "type": "auth_check_done",
+                "requestId": request_id,
+                "opened": False,
+                "error": str(exc),
+                "finalUrl": None,
+                "title": None,
+            })
+        finally:
+            if context is not None:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            if browser is not None:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
     async def _execute(self, payload, resolve_asset, on_step, on_heartbeat, should_cancel, step_counter):
         """执行远端 run。复用 worker 的浏览器执行结构，但替换三个 hook。"""

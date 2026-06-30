@@ -5,6 +5,7 @@ Agent 是内部执行节点：Server 控制容量和派发，Agent 只接收 sta
 from __future__ import annotations
 
 import asyncio
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -29,6 +30,7 @@ class AgentHub:
     def __init__(self) -> None:
         self._agents: dict[str, AgentInfo] = {}
         self._run_to_agent: dict[str, str] = {}
+        self._pending_requests: dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
 
     async def register(self, agent_id: str, websocket: WebSocket, meta: dict[str, Any]) -> None:
@@ -81,6 +83,29 @@ class AgentHub:
         await self.send(agent_id, {"type": "stop_run", "runId": run_id, "reason": reason})
         return True
 
+    async def request_auth_check(self, payload: dict[str, Any], *, timeout: float = 60) -> dict[str, Any]:
+        agent_id = await self._choose_agent()
+        if not agent_id:
+            raise RuntimeError("没有在线 Agent，无法验证登录态")
+
+        request_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        async with self._lock:
+            self._pending_requests[request_id] = fut
+        try:
+            await self.send(agent_id, {"type": "auth_check", "requestId": request_id, **payload})
+            return await asyncio.wait_for(fut, timeout=timeout)
+        finally:
+            async with self._lock:
+                self._pending_requests.pop(request_id, None)
+
+    async def complete_request(self, request_id: str, payload: dict[str, Any]) -> None:
+        async with self._lock:
+            fut = self._pending_requests.pop(request_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(payload)
+
     async def touch(self, agent_id: str, run_id: str | None = None) -> None:
         async with self._lock:
             info = self._agents.get(agent_id)
@@ -103,6 +128,12 @@ class AgentHub:
 
     def online(self, agent_id: str) -> bool:
         return agent_id in self._agents
+
+    async def _choose_agent(self) -> str | None:
+        async with self._lock:
+            if not self._agents:
+                return None
+            return min(self._agents.values(), key=lambda info: len(info.running)).agent_id
 
     def list_agents(self) -> list[dict[str, Any]]:
         out = []

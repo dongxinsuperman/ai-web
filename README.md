@@ -16,7 +16,7 @@
 
 - 后端：FastAPI + Playwright + SQLAlchemy 2.0 + PostgreSQL
 - 前端：Vue3 + Vite + Element Plus + Pinia
-- 打包：Docker（基于 `mcr.microsoft.com/playwright/python`）
+- 打包：Docker（Server 使用轻量 Python 镜像；Agent 机器/镜像安装 Playwright 浏览器）
 
 ## 文档
 

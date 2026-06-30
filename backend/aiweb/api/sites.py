@@ -1,21 +1,14 @@
-"""站点映射与免登：CRUD + 录制登录态（headful 一次性手动登录，导出 storageState）。"""
+"""站点映射与免登：CRUD + 登录接口配方编译 / Agent 登录态验证。"""
 from __future__ import annotations
-
-import time
-import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import select
 
+from aiweb.agent_hub import agent_hub
 from aiweb.db import session_scope
-from aiweb.kernel.browser import browser_manager
 from aiweb.models.site import Site
 
 router = APIRouter(tags=["sites"])
-
-# 录制会话：token -> {browser, context, created}
-_RECORD: dict[str, dict] = {}
-_RECORD_TTL = 600  # 10 分钟未保存自动放弃
 
 
 def _guard():
@@ -82,55 +75,6 @@ async def delete_site(site_id: str):
         return {"deleted": site_id}
 
 
-# ---------------- 录制登录态 ----------------
-def _gc_records() -> None:
-    now = time.time()
-    for tok in [t for t, v in _RECORD.items() if now - v["created"] > _RECORD_TTL]:
-        sess = _RECORD.pop(tok, None)
-        if sess:
-            try:
-                import asyncio
-                asyncio.create_task(sess["browser"].close())
-            except Exception:
-                pass
-
-
-@router.post("/sites/record/start", dependencies=[_guard()])
-async def record_start(payload: dict = Body(...)):
-    """弹出有头浏览器并打开 url，等待用户手动登录。返回 recordToken。"""
-    url = payload.get("url")
-    if not url:
-        raise HTTPException(status_code=400, detail="url 必填")
-    _gc_records()
-    try:
-        browser = await browser_manager.launch(headless=False)
-        context = await browser.new_context(locale="zh-CN")
-        page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"无法启动录制浏览器（需有显示器环境）：{e}")
-    token = uuid.uuid4().hex[:12]
-    _RECORD[token] = {"browser": browser, "context": context, "created": time.time()}
-    return {"recordToken": token, "message": "请在弹出的浏览器中手动登录，完成后调用 save"}
-
-
-@router.post("/sites/record/save", dependencies=[_guard()])
-async def record_save(payload: dict = Body(...)):
-    """导出当前登录态 storageState 并关闭录制浏览器。"""
-    token = payload.get("recordToken")
-    sess = _RECORD.pop(token, None)
-    if not sess:
-        raise HTTPException(status_code=404, detail="录制会话不存在或已过期")
-    try:
-        state = await sess["context"].storage_state()
-    finally:
-        try:
-            await sess["browser"].close()
-        except Exception:
-            pass
-    return {"storageState": state}
-
-
 _PARSE_SYSTEM = (
     "你是免登配方编译器。把用户用自然语言描述的『如何为某网站获取并注入登录态』"
     "编译成结构化 JSON 配方。只输出 JSON，不要多余文字。"
@@ -183,44 +127,50 @@ def _looks_logged_in(final_url: str, title: str) -> bool:
     return not any(k in low for k in ("login", "signin", "sign-in", "登录", "登陆"))
 
 
+def _ensure_agent_available() -> None:
+    if not agent_hub.list_agents():
+        raise HTTPException(status_code=409, detail="没有在线 Agent，无法验证登录态")
+
+
 async def _open_and_check(cookies: list, local_storage: list, url: str) -> dict:
-    """带凭证无头打开站点，返回落点信息。"""
+    """把登录态发给 Agent，由 Agent 打开页面并返回落点信息。"""
     from aiweb import sites as SITES
 
     origin = SITES._origin_of(url)
     storage_state = {"cookies": cookies,
                      "origins": [{"origin": origin, "localStorage": local_storage}] if local_storage else []}
-    browser = None
     try:
-        browser = await browser_manager.launch(headless=True)
-        context = await browser_manager.new_context(browser, storage_state=storage_state)
-        page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded")
-        try:
-            await page.wait_for_load_state("networkidle", timeout=4000)
-        except Exception:
-            pass
-        final_url, title = page.url, await page.title()
+        opened = await agent_hub.request_auth_check({
+            "url": url,
+            "storageState": storage_state,
+            "headless": True,
+            "platform": "chrome",
+            "networkIdleTimeoutMs": 4000,
+        })
+        if not opened.get("opened"):
+            return {
+                "opened": False,
+                "error": opened.get("error") or "Agent 打开页面失败",
+                "finalUrl": opened.get("finalUrl"),
+                "title": opened.get("title"),
+                "loggedIn": False,
+            }
+        final_url, title = opened.get("finalUrl"), opened.get("title")
         return {"opened": True, "finalUrl": final_url, "title": title, "loggedIn": _looks_logged_in(final_url, title)}
     except Exception as e:
         return {"opened": False, "error": str(e), "finalUrl": None, "title": None, "loggedIn": False}
-    finally:
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
 
 
 @router.post("/sites/verify-auth", dependencies=[_guard()])
 async def verify_auth(payload: dict = Body(...)):
-    """真跑一次配方 + 无头打开站点，回报能不能登进去（手动复核已编辑的配方用）。"""
+    """真跑一次配方 + 让 Agent 打开站点，回报能不能登进去（手动复核已编辑的配方用）。"""
     from aiweb import sites as SITES
 
     recipe = payload.get("recipe") or {}
     url = payload.get("url")
     if not url:
         raise HTTPException(status_code=400, detail="url 必填（站点前端地址）")
+    _ensure_agent_available()
     run = await SITES.run_login_recipe(recipe, url)
     if not run["ok"]:
         return {"ok": False, "stage": "login_api", "detail": run["error"], "loginResponse": run.get("login_response")}
@@ -257,7 +207,7 @@ _COMPILE_RULE = """
 
 @router.post("/sites/compile-auth", dependencies=[_guard()])
 async def compile_auth(payload: dict = Body(...)):
-    """Agentic 自修正：模糊描述 → 出配方 → 真跑 → 看真实响应/落点 → 修正 → 直到能登进去。"""
+    """Agentic 自修正：模糊描述 → 出配方 → 调登录接口 → Agent 看落点 → 修正。"""
     import json
     import re as _re
 
@@ -268,6 +218,7 @@ async def compile_auth(payload: dict = Body(...)):
     url = payload.get("url")
     if not description or not url:
         raise HTTPException(status_code=400, detail="description 与 url 必填")
+    _ensure_agent_available()
     max_iters = int(payload.get("maxIters", 4))
 
     vc = create_assistant()
@@ -312,15 +263,3 @@ async def compile_auth(payload: dict = Body(...)):
 
     return {"ok": False, "recipe": last_recipe, "attempts": max_iters,
             "detail": "多次自修正仍未确认登录，请人工检查/调整配方", "trail": trail}
-
-
-@router.post("/sites/record/cancel", dependencies=[_guard()])
-async def record_cancel(payload: dict = Body(...)):
-    token = payload.get("recordToken")
-    sess = _RECORD.pop(token, None)
-    if sess:
-        try:
-            await sess["browser"].close()
-        except Exception:
-            pass
-    return {"cancelled": token}

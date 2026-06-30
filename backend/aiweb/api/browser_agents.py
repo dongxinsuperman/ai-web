@@ -72,6 +72,8 @@ async def browser_agent_ws(websocket: WebSocket, token: str | None = Query(defau
             elif msg_type == "run_done" and run_id:
                 await finalize_run(run_id, _RemoteResult(msg), elapsed_ms=msg.get("elapsedMs"))
                 await agent_hub.finish_run(run_id)
+            elif msg_type == "auth_check_done" and msg.get("requestId"):
+                await agent_hub.complete_request(str(msg["requestId"]), msg)
             elif msg_type == "log":
                 logger.info("Agent %s: %s", agent_id, msg.get("message"))
             else:

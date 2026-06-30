@@ -1,4 +1,4 @@
-"""FastAPI 入口：生命周期内启动浏览器 / 调度器 / 回收器，挂载静态文件与 API。"""
+"""FastAPI 入口：生命周期内启动调度器 / 回收器，挂载静态文件与 API。"""
 from __future__ import annotations
 
 import logging
@@ -11,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 
 from aiweb.api import api_router
 from aiweb.db import init_db
-from aiweb.kernel.browser import browser_manager
 from aiweb.scheduler.dispatcher import dispatcher
 from aiweb.scheduler.reaper import reaper
 from aiweb.settings import get_settings
@@ -27,7 +26,6 @@ async def lifespan(app: FastAPI):
     logger.info("AI Web 启动中 pod=%s", settings.pod_id)
     await init_db()
     get_storage()  # 确保存储目录就绪
-    await browser_manager.start()
     await reaper.start()
     await dispatcher.start()
     logger.info("AI Web 就绪 :%s", settings.port)
@@ -36,7 +34,6 @@ async def lifespan(app: FastAPI):
     finally:
         await dispatcher.stop()
         await reaper.stop()
-        await browser_manager.stop()
         logger.info("AI Web 已停止")
 
 

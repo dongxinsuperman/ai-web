@@ -16,7 +16,7 @@ async def auth_guard(authorization: str | None = Header(default=None)) -> None:
 
 
 # 注意：路由模块在装饰阶段会引用 auth_guard，必须在其定义之后再导入。
-from aiweb.api import assets, config, devices, queue, sites, submissions  # noqa: E402
+from aiweb.api import assets, browser_agents, config, devices, queue, sites, submissions  # noqa: E402
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(queue.router)
@@ -25,3 +25,4 @@ api_router.include_router(submissions.router)
 api_router.include_router(assets.router)
 api_router.include_router(config.router)
 api_router.include_router(sites.router)
+api_router.include_router(browser_agents.router)

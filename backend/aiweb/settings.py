@@ -87,9 +87,9 @@ class Settings(BaseSettings):
     headless: bool = True
     # 反检测：自定义 UA（留空=用浏览器默认并自动抹掉 Headless 标记）
     user_agent: str = ""
-    # 浏览器槽位：每个引擎几台（像 ai-phone：几个端有几台）。0/省略=不启用该引擎。
-    # 需先 playwright install 对应浏览器。可在维护台热改。
-    browser_slots: str = "chrome:2,firefox:1,webkit:1"
+    # 浏览器 Agent 节点容量：{"mac-01":{"chrome":1}}。Server 不再本机执行浏览器任务。
+    # 需在维护台配置节点，并启动同名 Agent。
+    browser_slots: str = "{}"
     cache_enabled: bool = True
     cache_reset_threshold: int = 30000
 

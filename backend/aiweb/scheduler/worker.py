@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import base64
 
 from sqlalchemy import select
 
@@ -34,85 +35,87 @@ async def _get_headless() -> bool:
     return get_settings().headless
 
 
-async def run_item(item_id: str) -> None:
+async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
     settings = get_settings()
     storage = get_storage()
+    headless = await _get_headless()
 
-    # 1. 载入 item / submission，创建 run
     async with session_scope() as s:
         item = await s.get(Item, item_id)
         if item is None or item.state != ITEM_RUNNING:
-            return
+            return None
         submission = await s.get(Submission, item.submission_id)
+        if submission is None:
+            return None
         run = Run(item_id=item.id, state=RUN_RUNNING, claimed_by=settings.pod_id, heartbeat_at=utcnow())
+        run.claimed_by = claimed_by
         s.add(run)
         await s.flush()
-        run_id = run.id
-        submission_id = submission.id
-        callback_url = submission.callback_url
-        function_map_context = submission.function_map_context
-        run_content = item.run_content
-        assets = list(item.assets or [])
-        platform = item.platform or "chrome"
-        case_retry_max = item.retry_max
-        attempts = item.attempts
         # 站点映射与免登：命中站点 → 网址簿（注入 prompt）+ 登录态（注入浏览器）
-        matched_sites = await SITES.resolve_sites(s, run_content)
+        matched_sites = await SITES.resolve_sites(s, item.run_content)
         site_directory = SITES.build_directory_text(matched_sites)
 
-    # 2. 起浏览器并执行内核（不持 DB 会话）
+        payload = {
+            "runId": run.id,
+            "itemId": item.id,
+            "submissionId": submission.id,
+            "caseId": item.case_id,
+            "caseName": item.case_name,
+            "platform": item.platform or "chrome",
+            "runContent": item.run_content,
+            "assets": [
+                {"name": name, "url": storage.url_for(f"assets/{name}")}
+                for name in list(item.assets or [])
+            ],
+            "functionMapContext": submission.function_map_context,
+            "siteDirectory": site_directory,
+            "storageState": None,
+            "headless": headless,
+            "viewport": {"width": settings.viewport_size[0], "height": settings.viewport_size[1]},
+        }
+
+    # login_api 可能访问外部系统，放在 DB session 外执行。
+    payload["storageState"] = await SITES.build_auth_storage_state(matched_sites)
+    return payload
+
+
+async def run_item(item_id: str) -> None:
+    payload = await create_run_for_item(item_id, claimed_by=get_settings().pod_id)
+    if not payload:
+        return
+
+    result, elapsed_ms = await execute_browser_payload(payload, resolve_asset=get_storage().resolve_asset)
+    await finalize_run(payload["runId"], result, elapsed_ms=elapsed_ms)
+
+
+async def execute_browser_payload(payload: dict, *, resolve_asset) -> tuple["_FakeResult", int]:
     t0 = time.time()
     step_counter = {"n": 0}
+    run_id = payload["runId"]
+    item_id = payload["itemId"]
 
-    async def persist_step(payload: dict) -> None:
-        before_url = after_url = None
-        sb = payload.get("screenshot_before")
-        sa = payload.get("screenshot_after")
-        if sb:
-            _, before_url = storage.save_screenshot(submission_id, run_id, f"{payload['step_no']}_before.png", sb)
-        if sa:
-            _, after_url = storage.save_screenshot(submission_id, run_id, f"{payload['step_no']}_after.png", sa)
-        step_counter["n"] = payload["step_no"]
-        async with session_scope() as s:
-            s.add(RunStep(
-                run_id=run_id,
-                step_no=payload["step_no"],
-                action=payload.get("action"),
-                thought=payload.get("thought"),
-                action_raw=payload.get("action_raw"),
-                action_detail=payload.get("action_detail"),
-                screenshot_before=before_url,
-                screenshot_after=after_url,
-                token_usage=payload.get("token_usage"),
-                elapsed_ms=payload.get("elapsed_ms"),
-            ))
+    async def persist_step(step: dict) -> None:
+        step_counter["n"] = int(step.get("step_no") or step_counter["n"])
+        await persist_run_step(run_id, step)
 
     async def heartbeat() -> None:
-        async with session_scope() as s:
-            r = await s.get(Run, run_id)
-            if r:
-                r.heartbeat_at = utcnow()
+        await heartbeat_run(run_id)
 
     async def should_cancel() -> bool:
-        async with session_scope() as s:
-            it = await s.get(Item, item_id)
-            return bool(it and it.cancel_requested)
+        return await should_cancel_item(item_id)
 
-    headless = await _get_headless()
-    # 构建登录态（含 login_api 动态现取；best-effort，失败不阻断）
-    site_storage_state = await SITES.build_auth_storage_state(matched_sites)
     browser = None
     context = None
     try:
-        browser = await browser_manager.launch(headless, platform)
-        context = await browser_manager.new_context(browser, storage_state=site_storage_state)
+        browser = await browser_manager.launch(bool(payload.get("headless")), payload.get("platform") or "chrome")
+        context = await browser_manager.new_context(browser, storage_state=payload.get("storageState"))
         page = await context.new_page()
-        runner = WebVLMRunner(context, page, storage.resolve_asset)
+        runner = WebVLMRunner(context, page, resolve_asset)
         result = await runner.run(
-            run_content,
-            has_assets=bool(assets),
-            function_map_context=function_map_context,
-            site_directory=site_directory,
+            payload.get("runContent") or "",
+            has_assets=bool(payload.get("assets")),
+            function_map_context=payload.get("functionMapContext"),
+            site_directory=payload.get("siteDirectory"),
             on_step=persist_step,
             on_heartbeat=heartbeat,
             should_cancel=should_cancel,
@@ -133,12 +136,73 @@ async def run_item(item_id: str) -> None:
                 pass
 
     elapsed_ms = int((time.time() - t0) * 1000)
+    return result, elapsed_ms
 
-    # 3. 落终态 + 报告 + 回调
-    await _finalize(
-        run_id=run_id, item_id=item_id, submission_id=submission_id, callback_url=callback_url,
-        result=result, elapsed_ms=elapsed_ms, case_retry_max=case_retry_max, attempts=attempts,
-    )
+
+def _image_bytes(payload: dict, key: str) -> bytes | None:
+    raw = payload.get(key)
+    if isinstance(raw, bytes):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            return base64.b64decode(raw)
+        except Exception:
+            return None
+    b64 = payload.get(f"{key}_b64")
+    if isinstance(b64, str) and b64:
+        try:
+            return base64.b64decode(b64)
+        except Exception:
+            return None
+    return None
+
+
+async def persist_run_step(run_id: str, payload: dict) -> None:
+    storage = get_storage()
+    step_no = int(payload.get("step_no") or 0)
+    before_url = after_url = None
+    sb = _image_bytes(payload, "screenshot_before")
+    sa = _image_bytes(payload, "screenshot_after")
+
+    async with session_scope() as s:
+        run = await s.get(Run, run_id)
+        if run is None:
+            return
+        item = await s.get(Item, run.item_id)
+        if item is None:
+            return
+        if sb:
+            _, before_url = storage.save_screenshot(item.submission_id, run_id, f"{step_no}_before.png", sb)
+        if sa:
+            _, after_url = storage.save_screenshot(item.submission_id, run_id, f"{step_no}_after.png", sa)
+
+        existing = (await s.execute(
+            select(RunStep).where(RunStep.run_id == run_id, RunStep.step_no == step_no)
+        )).scalars().first()
+        if existing is None:
+            existing = RunStep(run_id=run_id, step_no=step_no)
+            s.add(existing)
+        existing.action = payload.get("action")
+        existing.thought = payload.get("thought")
+        existing.action_raw = payload.get("action_raw")
+        existing.action_detail = payload.get("action_detail")
+        existing.screenshot_before = before_url or existing.screenshot_before
+        existing.screenshot_after = after_url or existing.screenshot_after
+        existing.token_usage = payload.get("token_usage")
+        existing.elapsed_ms = payload.get("elapsed_ms")
+
+
+async def heartbeat_run(run_id: str) -> None:
+    async with session_scope() as s:
+        r = await s.get(Run, run_id)
+        if r:
+            r.heartbeat_at = utcnow()
+
+
+async def should_cancel_item(item_id: str) -> bool:
+    async with session_scope() as s:
+        it = await s.get(Item, item_id)
+        return bool(it and it.cancel_requested)
 
 
 class _FakeResult:
@@ -155,13 +219,21 @@ def _failed_result(steps, reason):
     return _FakeResult("failed", steps, {}, fail_reason=reason)
 
 
-async def _finalize(*, run_id, item_id, submission_id, callback_url, result, elapsed_ms, case_retry_max, attempts):
+async def finalize_run(run_id: str, result, *, elapsed_ms: int | None = None) -> None:
     storage = get_storage()
     retrying = False
 
     async with session_scope() as s:
         run = await s.get(Run, run_id)
-        item = await s.get(Item, item_id)
+        if run is None:
+            return
+        item = await s.get(Item, run.item_id)
+        if item is None:
+            return
+        submission = await s.get(Submission, item.submission_id)
+        if submission is None:
+            return
+        callback_url = submission.callback_url
         run.state = RUN_SUCCESS if result.status == "success" else RUN_FAILED
         run.steps = result.steps
         run.token_usage = result.token_usage or {}
@@ -179,7 +251,7 @@ async def _finalize(*, run_id, item_id, submission_id, callback_url, result, ela
             item.state = ITEM_FAILED
             item.status_reason = "needs_human"
         else:  # failed
-            if attempts <= case_retry_max:
+            if item.attempts <= item.retry_max:
                 item.state = ITEM_QUEUED  # 重试
                 item.status_reason = "retry"
                 retrying = True
@@ -203,7 +275,7 @@ async def _finalize(*, run_id, item_id, submission_id, callback_url, result, ela
             finish_content=result.finish_content, segments=getattr(result, "segments", 1),
         )
         # 文件名带 platform：一条 case 多端 fan-out 时各端各自报告，避免同 caseId 互相覆盖
-        _, report_url = storage.save_report(submission_id, f"{item.case_id}_{item.platform}.html", html)
+        _, report_url = storage.save_report(item.submission_id, f"{item.case_id}_{item.platform}.html", html)
         if not retrying:
             item.report_url = report_url
 
@@ -211,8 +283,8 @@ async def _finalize(*, run_id, item_id, submission_id, callback_url, result, ela
         return  # 等待下一轮调度重试，不发终态
 
     # 4. item 终态：刷新批次计数，必要时收口
-    await _refresh_submission(submission_id)
-    await _maybe_fire_terminal(run_id, item_id, submission_id, callback_url)
+    await _refresh_submission(item.submission_id)
+    await _maybe_fire_terminal(run_id, item.id, item.submission_id, callback_url)
 
 
 async def _refresh_submission(submission_id: str) -> None:

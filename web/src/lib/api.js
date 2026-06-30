@@ -24,6 +24,7 @@ export const api = {
   deleteAsset: (assetId) => http.delete(`/api/assets/${assetId}`),
   getConfig: () => http.get("/api/config"),
   putConfig: (payload) => http.put("/api/config", payload),
+  listAgents: () => http.get("/api/browser-agents"),
   listSites: () => http.get("/api/sites"),
   createSite: (payload) => http.post("/api/sites", payload),
   updateSite: (id, payload) => http.put(`/api/sites/${id}`, payload),

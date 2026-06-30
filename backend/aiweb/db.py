@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from aiweb.settings import get_settings
@@ -33,3 +34,6 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Agent 分支需要更长的节点容量 JSON；老库 create_all 不会自动改列类型。
+        if conn.dialect.name == "postgresql":
+            await conn.execute(text("ALTER TABLE t_aiweb_config ALTER COLUMN value TYPE TEXT"))

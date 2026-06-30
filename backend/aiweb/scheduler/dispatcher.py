@@ -6,10 +6,12 @@ import logging
 
 from sqlalchemy import func, select, text
 
+from aiweb.agent_hub import agent_hub
 from aiweb.db import session_scope
-from aiweb.models.item import ITEM_RUNNING, Item
-from aiweb.scheduler.worker import run_item
-from aiweb.slots import canon, get_slots
+from aiweb.models.item import Item
+from aiweb.models.run import RUN_RUNNING, Run
+from aiweb.scheduler.worker import create_run_for_item, finalize_run, _failed_result
+from aiweb.slots import canon, get_node_slots
 from aiweb.settings import get_settings
 
 logger = logging.getLogger("aiweb.dispatcher")
@@ -34,22 +36,25 @@ _CLAIM_SQL = text(
 class Dispatcher:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._tasks: set[asyncio.Task] = set()
         self._stop = asyncio.Event()
         self._loop_task: asyncio.Task | None = None
 
-    async def _running_counts(self) -> dict[str, int]:
-        """各引擎执行中数量（DB 权威，多 Pod 共享）。"""
+    async def _running_counts(self) -> dict[tuple[str, str], int]:
+        """各节点/引擎执行中数量（DB 权威，多 Pod 共享）。"""
         async with session_scope() as s:
             rows = (await s.execute(
-                select(Item.platform, func.count())
-                .where(Item.state == ITEM_RUNNING)
-                .group_by(Item.platform)
+                select(Run.claimed_by, Item.platform, func.count())
+                .join(Item, Run.item_id == Item.id)
+                .where(Run.state == RUN_RUNNING)
+                .group_by(Run.claimed_by, Item.platform)
             )).all()
-        out: dict[str, int] = {}
-        for plat, c in rows:
+        out: dict[tuple[str, str], int] = {}
+        for claimed_by, plat, c in rows:
+            if not claimed_by:
+                continue
+            node = claimed_by
             eng = canon(plat)
-            out[eng] = out.get(eng, 0) + int(c)
+            out[(node, eng)] = out.get((node, eng), 0) + int(c)
         return out
 
     async def _claim_one(self, plat: str) -> str | None:
@@ -57,32 +62,38 @@ class Dispatcher:
             row = (await s.execute(_CLAIM_SQL, {"plat": plat})).first()
             return row[0] if row else None
 
-    def _spawn(self, item_id: str) -> None:
-        task = asyncio.create_task(self._guarded_run(item_id))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _guarded_run(self, item_id: str) -> None:
+    async def _dispatch_agent(self, item_id: str, agent_id: str) -> None:
+        run_payload = await create_run_for_item(item_id, claimed_by=agent_id)
+        if not run_payload:
+            return
         try:
-            await run_item(item_id)
-        except Exception:
-            logger.exception("run_item 顶层异常 item=%s", item_id)
+            await agent_hub.send_start_run(agent_id, run_payload)
+        except Exception as exc:
+            logger.warning("派发 Agent 失败 agent=%s item=%s: %s", agent_id, item_id, exc)
+            await finalize_run(
+                run_payload["runId"],
+                _failed_result(0, f"dispatch_failed: {exc}"),
+                elapsed_ms=0,
+            )
 
     async def _loop(self) -> None:
         poll = self.settings.poll_interval_ms / 1000.0
         while not self._stop.is_set():
             try:
                 async with session_scope() as s:
-                    slots = await get_slots(s)  # {引擎: 台数}
+                    node_slots = await get_node_slots(s)  # {节点: {引擎: 台数}}
                 running = await self._running_counts()
-                for eng, cap in slots.items():
-                    cur = running.get(eng, 0)
-                    while cur < cap:
-                        item_id = await self._claim_one(eng)
-                        if not item_id:
-                            break
-                        self._spawn(item_id)
-                        cur += 1
+                for node_id, slots in node_slots.items():
+                    if not agent_hub.online(node_id):
+                        continue
+                    for eng, cap in slots.items():
+                        cur = running.get((node_id, eng), 0)
+                        while cur < cap:
+                            item_id = await self._claim_one(eng)
+                            if not item_id:
+                                break
+                            await self._dispatch_agent(item_id, node_id)
+                            cur += 1
             except Exception:
                 logger.exception("dispatcher loop 异常")
             await asyncio.sleep(poll)
@@ -95,8 +106,6 @@ class Dispatcher:
         self._stop.set()
         if self._loop_task:
             self._loop_task.cancel()
-        for t in list(self._tasks):
-            t.cancel()
 
 
 dispatcher = Dispatcher()

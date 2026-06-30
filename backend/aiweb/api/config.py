@@ -7,7 +7,7 @@ from sqlalchemy import select
 from aiweb.db import session_scope
 from aiweb.models.config import ConfigKV
 from aiweb.settings import get_settings
-from aiweb.slots import canon, default_slots, parse_slots, slots_json
+from aiweb.slots import default_node_slots, normalize_slots_value
 
 router = APIRouter(tags=["config"])
 
@@ -21,26 +21,15 @@ def _guard():
 
 
 def _normalize_slots(value) -> str:
-    """前端可传对象 {chrome:2,...} 或字符串；统一存成规范化 JSON（含 0）。"""
-    if isinstance(value, dict):
-        m = {}
-        for k, v in value.items():
-            try:
-                n = int(v)
-            except Exception:
-                continue
-            if n > 0:
-                eng = canon(k)
-                m[eng] = m.get(eng, 0) + n
-        return slots_json(m)
-    return slots_json(parse_slots(str(value)))
+    """前端可传旧对象 {chrome:2,...} 或新对象 {local:{chrome:2},...}。"""
+    return normalize_slots_value(value)
 
 
 @router.get("/config", dependencies=[_guard()])
 async def get_config():
     settings = get_settings()
     result = {
-        "browser_slots": slots_json(default_slots()),
+        "browser_slots": normalize_slots_value(default_node_slots()),
         "headless": str(settings.headless).lower(),
     }
     async with session_scope() as s:

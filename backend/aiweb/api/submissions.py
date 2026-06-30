@@ -4,9 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import select
 
+from aiweb.agent_hub import agent_hub
 from aiweb.db import session_scope
 from aiweb.models.item import (ITEM_CANCELLED, ITEM_QUEUED, ITEM_RUNNING, Item)
-from aiweb.models.run import Run, RunStep
+from aiweb.models.run import RUN_RUNNING, Run, RunStep
 from aiweb.models.submission import Submission
 from aiweb.scheduler.service import SubmissionRejected, parse_and_validate
 from aiweb.slots import canon
@@ -121,6 +122,7 @@ async def get_item(
 
 @router.post("/submissions/{submission_id}/cancel", dependencies=[_guard()])
 async def cancel_submission(submission_id: str):
+    stop_runs: list[str] = []
     async with session_scope() as s:
         items = (await s.execute(
             select(Item).where(Item.submission_id == submission_id)
@@ -135,12 +137,23 @@ async def cancel_submission(submission_id: str):
                 n += 1
             elif it.state == ITEM_RUNNING:
                 it.cancel_requested = True
+                run = (await s.execute(
+                    select(Run).where(Run.item_id == it.id, Run.state == RUN_RUNNING).order_by(Run.started_at.desc())
+                )).scalars().first()
+                if run:
+                    stop_runs.append(run.id)
                 n += 1
-        return {"cancelled": n}
+    for run_id in stop_runs:
+        try:
+            await agent_hub.send_stop_run(run_id)
+        except Exception:
+            pass
+    return {"cancelled": n}
 
 
 @router.post("/submissions/{submission_id}/cases/{case_id}/cancel", dependencies=[_guard()])
 async def cancel_item(submission_id: str, case_id: str, platform: str | None = Query(default=None)):
+    stop_runs: list[str] = []
     async with session_scope() as s:
         # 不传 platform = 取消该 case 的全部端；传了只取消指定端
         conds = [Item.submission_id == submission_id, Item.case_id == case_id]
@@ -156,6 +169,16 @@ async def cancel_item(submission_id: str, case_id: str, platform: str | None = Q
                 item.status_reason = "cancelled"
             elif item.state == ITEM_RUNNING:
                 item.cancel_requested = True
+                run = (await s.execute(
+                    select(Run).where(Run.item_id == item.id, Run.state == RUN_RUNNING).order_by(Run.started_at.desc())
+                )).scalars().first()
+                if run:
+                    stop_runs.append(run.id)
             results.append({"platform": item.platform, "state": item.state,
                             "cancelRequested": item.cancel_requested})
-        return {"cases": results}
+    for run_id in stop_runs:
+        try:
+            await agent_hub.send_stop_run(run_id)
+        except Exception:
+            pass
+    return {"cases": results}

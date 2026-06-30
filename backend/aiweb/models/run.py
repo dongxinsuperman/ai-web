@@ -52,4 +52,7 @@ class RunStep(Base):
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    __table_args__ = (Index("idx_step_run", "run_id", "step_no"),)
+    __table_args__ = (
+        Index("idx_step_run", "run_id", "step_no"),
+        Index("uq_aiweb_run_step_run_step", "run_id", "step_no", unique=True),
+    )

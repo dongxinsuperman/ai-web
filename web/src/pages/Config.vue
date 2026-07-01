@@ -40,7 +40,10 @@
           </div>
         </el-form-item>
         <el-form-item label="浏览器模式">
-          <el-switch v-model="headless" active-text="无头 headless" inactive-text="有头 headful" inline-prompt />
+          <el-radio-group v-model="headless">
+            <el-radio-button :label="false">有头 headful</el-radio-button>
+            <el-radio-button :label="true">无头 headless</el-radio-button>
+          </el-radio-group>
           <div class="hint">有头（headful）更不易被风控（如百度滑块），但需有显示器；无头适合服务器/Pod。切换对下一个任务生效。</div>
         </el-form-item>
         <el-form-item>

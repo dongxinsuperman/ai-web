@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from aiweb.db import session_scope
 from aiweb.models.config import ConfigKV
+from aiweb.runtime_config import format_bool
 from aiweb.settings import get_settings
 from aiweb.slots import default_node_slots, normalize_slots_value
 
@@ -30,7 +31,7 @@ async def get_config():
     settings = get_settings()
     result = {
         "browser_slots": normalize_slots_value(default_node_slots()),
-        "headless": str(settings.headless).lower(),
+        "headless": format_bool(settings.headless),
     }
     async with session_scope() as s:
         rows = (await s.execute(select(ConfigKV))).scalars().all()
@@ -40,6 +41,7 @@ async def get_config():
             result[r.key] = r.value
     # browser_slots 统一规范化为 JSON，方便前端解析
     result["browser_slots"] = _normalize_slots(result["browser_slots"])
+    result["headless"] = format_bool(result.get("headless"), default=settings.headless)
     return result
 
 
@@ -49,7 +51,7 @@ async def update_config(payload: dict = Body(...)):
         for key, value in payload.items():
             if key not in _ALLOWED_KEYS:
                 continue
-            stored = _normalize_slots(value) if key == "browser_slots" else str(value)
+            stored = _normalize_slots(value) if key == "browser_slots" else format_bool(value)
             cfg = await s.get(ConfigKV, key)
             if cfg:
                 cfg.value = stored

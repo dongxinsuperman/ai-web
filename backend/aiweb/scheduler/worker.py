@@ -8,11 +8,11 @@ from sqlalchemy import select
 
 from aiweb import sites as SITES
 from aiweb.db import session_scope
-from aiweb.models.config import ConfigKV
 from aiweb.models.item import (ITEM_CANCELLED, ITEM_FAILED, ITEM_QUEUED, ITEM_RUNNING, ITEM_SUCCESS, Item)
 from aiweb.models.run import RUN_FAILED, RUN_RUNNING, RUN_SUCCESS, Run, RunStep
 from aiweb.models.submission import SUB_DONE, Submission
 from aiweb.report import build_item_report, build_summary_report
+from aiweb.runtime_config import get_headless
 from aiweb.settings import get_settings
 from aiweb.storage import get_storage
 from aiweb.webhook import fire_item_terminal, fire_submission_terminal
@@ -20,22 +20,12 @@ from aiweb.models.base import utcnow
 
 logger = logging.getLogger("aiweb.worker")
 _TERMINAL_ITEM = {ITEM_SUCCESS, ITEM_FAILED, ITEM_CANCELLED}
-_TRUTHY = {"1", "true", "yes", "on"}
-
-
-async def _get_headless() -> bool:
-    """读全局配置 headless（可热切）；未配置则回落到 settings 默认。"""
-    async with session_scope() as s:
-        cfg = await s.get(ConfigKV, "headless")
-        if cfg is not None:
-            return str(cfg.value).lower() in _TRUTHY
-    return get_settings().headless
 
 
 async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
     settings = get_settings()
     storage = get_storage()
-    headless = await _get_headless()
+    headless = await get_headless()
 
     async with session_scope() as s:
         item = await s.get(Item, item_id)

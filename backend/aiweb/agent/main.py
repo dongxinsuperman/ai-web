@@ -21,6 +21,24 @@ from aiweb.kernel.browser import browser_manager
 
 logger = logging.getLogger("aiweb.agent")
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_FALSEY = {"0", "false", "no", "off"}
+
+
+def _as_bool(value, *, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    s = str(value).strip().lower()
+    if s in _TRUTHY:
+        return True
+    if s in _FALSEY:
+        return False
+    return default
+
 
 def _ws_url(server: str, token: str | None) -> str:
     base = server.rstrip("/")
@@ -193,7 +211,10 @@ class BrowserAgent:
             url = payload.get("url")
             if not url:
                 raise ValueError("url required")
-            browser = await browser_manager.launch(bool(payload.get("headless", True)), payload.get("platform") or "chrome")
+            headless = _as_bool(payload.get("headless"), default=True)
+            platform = payload.get("platform") or "chrome"
+            logger.info("Agent 打开登录验证浏览器 request=%s platform=%s headless=%s", request_id, platform, headless)
+            browser = await browser_manager.launch(headless, platform)
             context = await browser_manager.new_context(browser, storage_state=payload.get("storageState"))
             page = await context.new_page()
             await page.goto(url, wait_until="domcontentloaded")
@@ -239,7 +260,10 @@ class BrowserAgent:
         browser = None
         context = None
         try:
-            browser = await browser_manager.launch(bool(payload.get("headless")), payload.get("platform") or "chrome")
+            headless = _as_bool(payload.get("headless"), default=True)
+            platform = payload.get("platform") or "chrome"
+            logger.info("Agent 启动任务浏览器 run=%s platform=%s headless=%s", payload.get("runId"), platform, headless)
+            browser = await browser_manager.launch(headless, platform)
             context = await browser_manager.new_context(browser, storage_state=payload.get("storageState"))
             page = await context.new_page()
             runner = WebVLMRunner(context, page, resolve_asset)

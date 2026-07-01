@@ -7,6 +7,7 @@ from sqlalchemy import select
 from aiweb.agent_hub import agent_hub
 from aiweb.db import session_scope
 from aiweb.models.site import Site
+from aiweb.runtime_config import get_headless
 
 router = APIRouter(tags=["sites"])
 
@@ -143,7 +144,7 @@ async def _open_and_check(cookies: list, local_storage: list, url: str) -> dict:
         opened = await agent_hub.request_auth_check({
             "url": url,
             "storageState": storage_state,
-            "headless": True,
+            "headless": await get_headless(),
             "platform": "chrome",
             "networkIdleTimeoutMs": 4000,
         })

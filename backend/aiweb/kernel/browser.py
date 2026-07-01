@@ -74,8 +74,16 @@ class BrowserManager:
         launcher = getattr(self._pw, engine)
         # 反检测启动参数是 Chromium 专属；firefox/webkit 用各自默认启动
         if engine == "chromium":
+            kwargs = {}
+            if headless:
+                # 默认 headless 会依赖单独的 chromium_headless_shell；用普通 Chromium 的
+                # new headless，避免 Agent 只装了常规 Chromium 时无头启动失败。
+                kwargs["channel"] = "chromium"
             return await launcher.launch(
-                headless=headless, args=_LAUNCH_ARGS, ignore_default_args=["--enable-automation"]
+                headless=headless,
+                args=_LAUNCH_ARGS,
+                ignore_default_args=["--enable-automation"],
+                **kwargs,
             )
         return await launcher.launch(headless=headless)
 

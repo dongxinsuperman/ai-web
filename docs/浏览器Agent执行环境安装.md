@@ -183,7 +183,7 @@ python - <<'PY'
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
+    browser = p.chromium.launch(headless=True, channel="chromium")
     print("chromium ok:", browser.version)
     browser.close()
 PY
@@ -196,7 +196,10 @@ python - <<'PY'
 from playwright.sync_api import sync_playwright
 
 with sync_playwright() as p:
-    for name in ("chromium", "firefox", "webkit"):
+    browser = p.chromium.launch(headless=True, channel="chromium")
+    print("chromium", "ok:", browser.version)
+    browser.close()
+    for name in ("firefox", "webkit"):
         browser = getattr(p, name).launch(headless=True)
         print(name, "ok:", browser.version)
         browser.close()
@@ -242,6 +245,8 @@ Agent 不决定容量，只负责执行。
 ### Executable doesn't exist
 
 表示 Agent 机器没有安装对应 Playwright 浏览器。
+
+如果报错路径包含 `chromium_headless_shell`，说明旧 Agent 的无头模式正在找 Playwright 单独的 headless shell。新 Agent 代码会让 Chromium 无头使用普通 Chromium 的 new headless 模式；同步代码后需要重启 Agent。也可以在 Agent 机器补装浏览器：
 
 在 Agent 机器执行：
 

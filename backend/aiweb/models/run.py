@@ -26,6 +26,7 @@ class Run(Base):
     token_usage: Mapped[dict] = mapped_column(JSON, default=dict)
     elapsed_ms: Mapped[int | None] = mapped_column(Integer)
     fail_reason: Mapped[str | None] = mapped_column(Text)
+    function_map_context: Mapped[str | None] = mapped_column(Text)
     claimed_by: Mapped[str | None] = mapped_column(String(64))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

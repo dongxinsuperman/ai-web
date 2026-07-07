@@ -32,6 +32,7 @@ async def get_config():
     result = {
         "browser_slots": normalize_slots_value(default_node_slots()),
         "headless": format_bool(settings.headless),
+        "function_map_context_max_chars": settings.function_map_context_max_chars,
     }
     async with session_scope() as s:
         rows = (await s.execute(select(ConfigKV))).scalars().all()

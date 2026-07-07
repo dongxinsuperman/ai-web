@@ -46,6 +46,7 @@ CLI：
 
 ```bash
 python ../cli/aiweb_cli.py submit --content "打开 https://example.com 验证标题包含 Example" --case d1
+python ../cli/aiweb_cli.py submit --content "检查待支付状态" --case pay1 --function-map-context "账号 demo/123456" --item-function-map-context "待支付入口在 我的-订单-待支付"
 python ../cli/aiweb_cli.py get <submissionId>
 python ../cli/aiweb_cli.py open-report <submissionId> --case d1
 ```

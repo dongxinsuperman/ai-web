@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from aiweb import sites as SITES
 from aiweb.db import session_scope
+from aiweb.function_map_context import merge_function_map_context
 from aiweb.models.item import (ITEM_CANCELLED, ITEM_FAILED, ITEM_QUEUED, ITEM_RUNNING, ITEM_SUCCESS, Item)
 from aiweb.models.run import RUN_FAILED, RUN_RUNNING, RUN_SUCCESS, Run, RunStep
 from aiweb.models.submission import SUB_DONE, Submission
@@ -34,7 +35,17 @@ async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
         submission = await s.get(Submission, item.submission_id)
         if submission is None:
             return None
-        run = Run(item_id=item.id, state=RUN_RUNNING, claimed_by=settings.pod_id, heartbeat_at=utcnow())
+        function_map_context = merge_function_map_context(
+            submission.function_map_context,
+            item.function_map_context,
+        )
+        run = Run(
+            item_id=item.id,
+            state=RUN_RUNNING,
+            claimed_by=settings.pod_id,
+            heartbeat_at=utcnow(),
+            function_map_context=function_map_context,
+        )
         run.claimed_by = claimed_by
         s.add(run)
         await s.flush()
@@ -54,7 +65,7 @@ async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
                 {"name": name, "url": storage.url_for(f"assets/{name}")}
                 for name in list(item.assets or [])
             ],
-            "functionMapContext": submission.function_map_context,
+            "functionMapContext": run.function_map_context,
             "siteDirectory": site_directory,
             "storageState": None,
             "headless": headless,

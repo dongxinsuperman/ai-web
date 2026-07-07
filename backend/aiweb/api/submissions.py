@@ -96,6 +96,7 @@ async def get_item(
         data = {
             "caseId": item.case_id, "caseName": item.case_name, "platform": item.platform,
             "runContent": item.run_content,
+            "functionMapContext": item.function_map_context,
             "state": item.state, "statusReason": item.status_reason, "attempts": item.attempts,
             "assets": item.assets or [], "reportUrl": item.report_url,
         }
@@ -111,6 +112,7 @@ async def get_item(
                     "id": run.id, "state": run.state, "steps": run.steps,
                     "tokenUsage": run.token_usage or {}, "elapsedMs": run.elapsed_ms,
                     "failReason": run.fail_reason,
+                    "functionMapContext": run.function_map_context,
                     "stepList": [{
                         "stepNo": st.step_no, "action": st.action, "thought": st.thought,
                         "actionRaw": st.action_raw, "screenshotBefore": st.screenshot_before,

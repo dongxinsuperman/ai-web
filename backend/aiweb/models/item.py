@@ -26,6 +26,7 @@ class Item(Base):
     case_id: Mapped[str | None] = mapped_column(String(255))
     case_name: Mapped[str | None] = mapped_column(String(255))
     run_content: Mapped[str] = mapped_column(Text)
+    function_map_context: Mapped[str | None] = mapped_column(Text)
     assets: Mapped[list] = mapped_column(JSON, default=list)
     platform: Mapped[str] = mapped_column(String(32), default="chrome")  # 浏览器类型
     state: Mapped[str] = mapped_column(String(16), default=ITEM_QUEUED)

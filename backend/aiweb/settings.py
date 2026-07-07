@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     browser_slots: str = "{}"
     cache_enabled: bool = True
     cache_reset_threshold: int = 30000
+    # functionMapContext 产品层字符上限；<=0 表示不限，不做静默截断。
+    function_map_context_max_chars: int = 0
 
     # 调度
     run_heartbeat_ttl_sec: int = 300

@@ -89,6 +89,14 @@
           <el-input v-model="form.runContent" type="textarea" :rows="4"
             placeholder="如：打开 https://example.com 并验证标题包含 Example" />
         </el-form-item>
+        <el-form-item label="批次参考">
+          <el-input v-model="form.functionMapContext" type="textarea" :rows="3"
+            placeholder="可选：整批共享的登录规则 / 测试账号 / 通用弹窗处理" />
+        </el-form-item>
+        <el-form-item label="任务参考">
+          <el-input v-model="form.itemFunctionMapContext" type="textarea" :rows="3"
+            placeholder="可选：仅当前 case 需要的入口、术语或异常处理" />
+        </el-form-item>
         <el-form-item label="Webhook"><el-input v-model="form.callbackUrl" placeholder="可选回调 URL" /></el-form-item>
         <el-form-item label="素材">
           <el-select v-model="form.assets" multiple filterable placeholder="可选，引用素材库文件" style="width:100%">
@@ -115,7 +123,15 @@ const assets = ref([]);
 const err = ref("");
 const createVisible = ref(false);
 const submitting = ref(false);
-const form = ref({ name: "", caseId: "", runContent: "", callbackUrl: "", assets: [] });
+const form = ref({
+  name: "",
+  caseId: "",
+  runContent: "",
+  functionMapContext: "",
+  itemFunctionMapContext: "",
+  callbackUrl: "",
+  assets: [],
+});
 let timer = null;
 
 const short = (s) => (s ? String(s).slice(0, 8) : "");
@@ -132,7 +148,15 @@ async function load() {
 }
 
 async function openCreate() {
-  form.value = { name: "", caseId: "", runContent: "", callbackUrl: "", assets: [] };
+  form.value = {
+    name: "",
+    caseId: "",
+    runContent: "",
+    functionMapContext: "",
+    itemFunctionMapContext: "",
+    callbackUrl: "",
+    assets: [],
+  };
   try { assets.value = (await api.listAssets()).data; } catch { assets.value = []; }
   createVisible.value = true;
 }
@@ -147,10 +171,12 @@ async function submit() {
     await api.createSubmission({
       submissionName: form.value.name || undefined,
       callbackUrl: form.value.callbackUrl || undefined,
+      functionMapContext: form.value.functionMapContext || undefined,
       items: [{
         caseId: form.value.caseId,
         caseName: form.value.name || undefined,
         runContent: form.value.runContent,
+        functionMapContext: form.value.itemFunctionMapContext || undefined,
         assets: form.value.assets,
       }],
     });

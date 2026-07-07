@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from aiweb.function_map_context import normalize_function_map_context
 from aiweb.models.asset import Asset
 from aiweb.models.item import Item
 from aiweb.models.submission import Submission
+from aiweb.settings import get_settings
 from aiweb.slots import canon, get_slots
 
 
@@ -25,12 +27,15 @@ async def parse_and_validate(session, payload: dict) -> Submission:
         raise SubmissionRejected("invalid_body", "items 必须是非空数组")
 
     retry_max = int(payload.get("retryMax", 0) or 0)
-    # functionMapContext：只读执行参考，封顶 8000 字（cacheMode / deviceAliasPools 收下即忽略）
-    fmc = payload.get("functionMapContext")
-    if isinstance(fmc, str) and fmc.strip():
-        fmc = fmc.strip()[:8000]
-    else:
-        fmc = None
+    max_chars = int(get_settings().function_map_context_max_chars or 0)
+    try:
+        fmc = normalize_function_map_context(
+            payload.get("functionMapContext"),
+            field="functionMapContext",
+            max_chars=max_chars,
+        )
+    except ValueError as exc:
+        raise SubmissionRejected("invalid_body", str(exc))
     submission = Submission(
         name=payload.get("submissionName"),
         callback_url=payload.get("callbackUrl"),
@@ -56,6 +61,14 @@ async def parse_and_validate(session, payload: dict) -> Submission:
             raise SubmissionRejected("missing_field", f"items[{idx}].caseId", idx)
         if not run_content:
             raise SubmissionRejected("missing_field", f"items[{idx}].runContent", idx)
+        try:
+            item_fmc = normalize_function_map_context(
+                raw.get("functionMapContext"),
+                field=f"items[{idx}].functionMapContext",
+                max_chars=max_chars,
+            )
+        except ValueError as exc:
+            raise SubmissionRejected("invalid_body", str(exc), idx)
 
         assets = raw.get("assets") or []
         if not isinstance(assets, list):
@@ -91,6 +104,7 @@ async def parse_and_validate(session, payload: dict) -> Submission:
                     case_id=str(case_id),
                     case_name=raw.get("caseName"),
                     run_content=str(run_content),
+                    function_map_context=item_fmc,
                     assets=assets,
                     platform=eng,
                     retry_max=retry_max,

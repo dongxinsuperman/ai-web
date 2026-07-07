@@ -37,3 +37,5 @@ async def init_db() -> None:
         # Agent 分支需要更长的节点容量 JSON；老库 create_all 不会自动改列类型。
         if conn.dialect.name == "postgresql":
             await conn.execute(text("ALTER TABLE t_aiweb_config ALTER COLUMN value TYPE TEXT"))
+            await conn.execute(text("ALTER TABLE t_aiweb_item ADD COLUMN IF NOT EXISTS function_map_context TEXT"))
+            await conn.execute(text("ALTER TABLE t_aiweb_run ADD COLUMN IF NOT EXISTS function_map_context TEXT"))

@@ -26,6 +26,13 @@ BASE_URL = os.getenv("AIWEB_BASE_URL", "http://127.0.0.1:8009").rstrip("/")
 API_TOKEN = os.getenv("AIWEB_API_TOKEN", "")
 
 
+def _optional_text(value: str | None, file_path: str | None) -> str | None:
+    if file_path:
+        with open(file_path, encoding="utf-8") as f:
+            return f.read()
+    return value
+
+
 def _request(method: str, path: str, body: dict | None = None) -> dict:
     url = f"{BASE_URL}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
@@ -54,9 +61,15 @@ def cmd_submit(args: argparse.Namespace) -> None:
             print("需要 --content 或 --file", file=sys.stderr)
             sys.exit(2)
         item = {"caseId": args.case or "case-1", "caseName": args.name, "runContent": args.content}
+        item_fmc = _optional_text(args.item_function_map_context, args.item_function_map_file)
+        if item_fmc:
+            item["functionMapContext"] = item_fmc
         if args.asset:
             item["assets"] = args.asset
         payload = {"submissionName": args.name, "callbackUrl": args.callback, "items": [item]}
+        fmc = _optional_text(args.function_map_context, args.function_map_file)
+        if fmc:
+            payload["functionMapContext"] = fmc
     out = _request("POST", "/api/submissions", payload)
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
@@ -101,6 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--name", help="批次 / 用例名")
     s.add_argument("--callback", help="Webhook 回调 URL")
     s.add_argument("--asset", action="append", help="引用素材名（可多次）")
+    s.add_argument("--function-map-context", help="批次级只读执行参考")
+    s.add_argument("--function-map-file", help="从文件读取批次级只读执行参考")
+    s.add_argument("--item-function-map-context", help="当前 case 的只读执行参考")
+    s.add_argument("--item-function-map-file", help="从文件读取当前 case 的只读执行参考")
     s.add_argument("--file", help="批次 JSON 文件（与 --content 二选一）")
     s.set_defaults(func=cmd_submit)
 

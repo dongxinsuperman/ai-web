@@ -2,6 +2,7 @@
 name = "aiweb"
 version = "0.1.0"
 description = "AI Web — 用自然语言驱动浏览器执行 Web 自动化的执行中台（个人开源版）"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.111",

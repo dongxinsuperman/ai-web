@@ -1,4 +1,6 @@
-# functionMapContext 执行单元级支持方案
+# Function Map Context 执行单元级支持方案
+
+> **已完成实施记录。** 当前使用方式以 [对外接口文档](<对外接口文档（集成方）.md>) 为准：顶层 `functionMapContext` 是批次公共参考，`items[].functionMapContext` 是当前执行单元的补充参考。本文保留设计和数据演进背景。
 
 ## 1. 背景
 
@@ -24,7 +26,7 @@ AI Web 当前已经支持批次级 `functionMapContext`。调用方在 `POST /ap
 
 最终 Agent 仍然只收到一份合并后的 `functionMapContext`，不需要知道来源层级。
 
-## 2. 当前 aiweb 架构现状
+## 2. 实施前的架构现状
 
 当前链路和 ai-phone 属于同类架构：
 
@@ -44,7 +46,7 @@ POST /api/submissions
 - worker 创建 Run 后，下发 payload 中包含 `functionMapContext`。
 - Agent 继续通过 `payload.functionMapContext` 注入 runner。
 
-当前缺口：
+实施前缺口：
 
 - `Item` 没有 `function_map_context` 字段。
 - `Run` 没有 `function_map_context` 字段，未保存本次 Run 实际注入文本。
@@ -52,7 +54,7 @@ POST /api/submissions
 - worker 下发时直接使用 `submission.function_map_context`，没有执行单元级合并。
 - 顶层 `functionMapContext` 当前按 8000 字硬截断，不是“不限”或显式拒绝。
 
-## 3. 目标行为
+## 3. 实施目标与当前行为
 
 支持 `POST /api/submissions` 的每个 `items[]` 单独传入 `functionMapContext`。
 
@@ -69,7 +71,7 @@ POST /api/submissions
 ```json
 {
   "submissionName": "release-smoke",
-  "functionMapContext": "全局：登录入口在首页右上角；测试账号 demo/password",
+  "functionMapContext": "全局：登录入口在首页右上角；测试账号 <测试账号>/<测试密码>",
   "items": [
     {
       "caseId": "login",

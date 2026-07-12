@@ -46,7 +46,7 @@ CLI：
 
 ```bash
 python ../cli/aiweb_cli.py submit --content "打开 https://example.com 验证标题包含 Example" --case d1
-python ../cli/aiweb_cli.py submit --content "检查待支付状态" --case pay1 --function-map-context "账号 demo/123456" --item-function-map-context "待支付入口在 我的-订单-待支付"
+python ../cli/aiweb_cli.py submit --content "检查待支付状态" --case pay1 --function-map-context "账号 <测试账号>/<测试密码>" --item-function-map-context "待支付入口在 我的-订单-待支付"
 python ../cli/aiweb_cli.py get <submissionId>
 python ../cli/aiweb_cli.py open-report <submissionId> --case d1
 ```
@@ -82,4 +82,4 @@ python tools/probe_actions.py
 
 `AIWEB_PUBLIC_BASE_URL` 是 Server 生成 `reportUrl` / `summaryReportUrl` / 素材 URL 的公开基址。Agent 只负责执行和回传截图，不生成报告链接；测试/生产环境必须把它配置成调用方和浏览器可访问的 AI Web Server 地址，不能保留默认 `http://127.0.0.1:8009`。
 
-鉴权：默认匿名；设置 `AIWEB_API_TOKEN` 后所有 `/api` 需带 `Authorization: Bearer <token>`，Agent 启动时也要传 `--token`。
+鉴权：空的 `AIWEB_API_TOKEN` 仅适合本机开发或受控内网；面向公网部署时必须设置 token。设置后所有 `/api` 需带 `Authorization: Bearer <token>`，Agent 启动时也要传 `--token`。

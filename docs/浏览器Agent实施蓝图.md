@@ -1,8 +1,8 @@
-# 浏览器 Agent 实施蓝图
+# Browser Agent 实施蓝图（历史资料）
 
-> 本文是 `codex/browser-agent-mvp` 分支的实施级蓝图。
->
-> 原则：Agent 改造是内部执行架构升级，**不改变 case-flow 对外调用契约**。
+> ⚠️ 本文是 Agent MVP 的实施过程记录。迁移已经完成，`main` 已是 Agent 主线，`codex/browser-agent-mvp` 已删除。当前使用 [快速开始](快速开始.md)、[Agent 主线架构](<架构说明（Agent主线）.md>) 和 [对外接口](<对外接口文档（集成方）.md>)。
+
+> 原则：Agent 改造是内部执行架构升级，不改变对外 Submission / Webhook 契约。
 
 ## 1. 分支边界
 
@@ -436,7 +436,7 @@ Agent 不职责：
 - 不上报容量。
 - 不管理队列。
 - 不生成最终 HTML 报告。
-- 不发 case-flow webhook。
+- 不发调用方 webhook。
 - 不决定调度。
 
 ## 11. assets 处理
@@ -566,11 +566,11 @@ win-01     6        2         0
 }
 ```
 
-关闭 Agent 模式的回滚方式是切回 `main`，不是在本分支启用 Server 本机执行。
+> 历史说明：本文编写时曾建议通过切回旧 `main` 回滚。当前仓库已经只有 Agent 主线；不再支持把 Server 本机浏览器模式作为运行选项。
 
 ## 16. 实际业务解释
 
-对 case-flow 来说，前后都是同一句话：
+对调用方来说，前后都是同一句话：
 
 ```text
 帮我跑这个 Web case，平台 chrome，完成后回调。
@@ -582,10 +582,10 @@ AI Web 内部以前是：
 Server 自己开浏览器跑。
 ```
 
-Agent 分支变成：
+迁移后的运行模式变成：
 
 ```text
 Server 派给 win-01，win-01 开浏览器跑。
 ```
 
-case-flow 不需要新增字段，也不需要知道 `win-01`。这就是本次改造最重要的产品边界。
+调用方不需要新增字段，也不需要知道 `win-01`。这就是本次改造最重要的产品边界。

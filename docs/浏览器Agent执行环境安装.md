@@ -1,6 +1,6 @@
-# 浏览器 Agent 执行环境安装
+# Browser Agent 执行环境安装
 
-> 适用分支：`codex/browser-agent-mvp`
+> 适用当前 `main`。本项目只有 Server 调度、Agent 执行这一种主线架构；文末对旧本机浏览器模式的说明仅是历史对比，不是部署选项。
 >
 > 本文说明 Agent 模式下浏览器运行环境应该装在哪里，以及 Mac / Windows / Linux Agent 的安装命令。
 
@@ -303,11 +303,11 @@ aiweb-agent
   只跑 python -m aiweb.agent
 ```
 
-这样 Server 镜像不会继续承担原 main 分支里的浏览器重量。
+这样 Server 镜像不会承担早期 Server 本机浏览器模式中的浏览器重量。
 
 ## 11. 实际场景简化
 
-原来的 main 分支像这样：
+早期 Server 本机浏览器模式像这样：
 
 ```text
 Server 自己收任务
@@ -315,7 +315,7 @@ Server 自己开浏览器
 所以 Server 镜像必须带浏览器和系统依赖
 ```
 
-Agent 分支应该像这样：
+当前 Agent 主线像这样：
 
 ```text
 Server 只做调度和报告

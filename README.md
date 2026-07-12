@@ -26,7 +26,7 @@ AI Web 不维护项目、需求、用例库或人工测试流程。它只有：*
 
 ## 作为 Case Flow 的 Web 子执行器
 
-AI Web 可以作为 **Case Flow 的一个 Web 子执行器** 被调用。Case Flow 负责组织用例、编排运行和查看整体结果；当其中一个用例需要真实操作网页时，由它通过 AI Web 的提交接口投递任务，AI Web 再调度 Browser Agent 执行并回传状态、报告和回调。
+AI Web 可以作为 [Case Flow](https://github.com/dongxinsuperman/case-flow-ai) 的一个 **Web 子执行器** 被调用。Case Flow 负责组织用例、编排运行和查看整体结果；当其中一个用例需要真实操作网页时，由它通过 AI Web 的提交接口投递任务，AI Web 再调度 Browser Agent 执行并回传状态、报告和回调。
 
 ```text
 Case Flow 用例 / 工作流
@@ -38,7 +38,7 @@ Browser Agent（真实浏览器操作）
 Case Flow 展示整体运行结果
 ```
 
-这样分工后，Case Flow 不需要承载浏览器、模型调用和 Agent 节点管理；AI Web 也不需要维护用例库。对接格式见 [对外接口](<docs/对外接口文档（集成方）.md>)。**Case Flow 的公开地址将在你提供后补入此处。**
+这样分工后，Case Flow 不需要承载浏览器、模型调用和 Agent 节点管理；AI Web 也不需要维护用例库。对接格式见 [对外接口](<docs/对外接口文档（集成方）.md>)。
 
 ## 执行流程
 

@@ -82,7 +82,7 @@ flowchart LR
 前置条件：Python 3.11+、PostgreSQL，以及一套可用的视觉模型配置。首次体验时，Server 和 Agent 可以运行在同一台机器，但它们仍是两个独立进程。
 
 ```bash
-git clone https://github.com/dongxinsuperman/aiweb.git
+git clone https://github.com/dongxinsuperman/ai-web.git
 cd aiweb/backend
 
 python3.11 -m venv .venv

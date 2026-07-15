@@ -137,6 +137,11 @@ def parse_action(action_str: str) -> dict:
             result["url"] = um.group(1)
 
     if action == "switch_tab":
+        tm = re.search(r"tab_id\s*=\s*'([^']*)'", params) or re.search(
+            r'tab_id\s*=\s*"([^\"]*)"', params
+        )
+        if tm and tm.group(1).strip():
+            result["tab_id"] = tm.group(1).strip()
         im = re.search(r"index\s*=\s*'?(\d+)'?", params)
         if im:
             result["index"] = int(im.group(1))

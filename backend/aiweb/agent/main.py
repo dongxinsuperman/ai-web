@@ -270,6 +270,7 @@ class BrowserAgent:
             result = await runner.run(
                 payload.get("runContent") or "",
                 has_assets=bool(payload.get("assets")),
+                assets=payload.get("assets") or [],
                 function_map_context=payload.get("functionMapContext"),
                 site_directory=payload.get("siteDirectory"),
                 on_step=on_step,

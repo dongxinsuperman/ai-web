@@ -9,6 +9,7 @@ from sqlalchemy import select
 from aiweb import sites as SITES
 from aiweb.db import session_scope
 from aiweb.function_map_context import merge_function_map_context
+from aiweb.models.asset import Asset
 from aiweb.models.item import (ITEM_CANCELLED, ITEM_FAILED, ITEM_QUEUED, ITEM_RUNNING, ITEM_SUCCESS, Item)
 from aiweb.models.run import RUN_FAILED, RUN_RUNNING, RUN_SUCCESS, Run, RunStep
 from aiweb.models.submission import SUB_DONE, Submission
@@ -52,6 +53,25 @@ async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
         # 站点映射与免登：命中站点 → 网址簿（注入 prompt）+ 登录态（注入浏览器）
         matched_sites = await SITES.resolve_sites(s, item.run_content)
         site_directory = SITES.build_directory_text(matched_sites)
+        asset_names = list(item.assets or [])
+        asset_rows = []
+        if asset_names:
+            asset_rows = (await s.execute(select(Asset).where(Asset.name.in_(asset_names)))).scalars().all()
+        assets_by_name = {asset.name: asset for asset in asset_rows}
+        payload_assets = []
+        for name in asset_names:
+            asset = assets_by_name.get(name)
+            if asset is None:
+                # 提交时已校验素材存在；保留空元数据让执行 Agent 的下载错误可见。
+                payload_assets.append({"name": name, "url": storage.url_for(f"assets/{name}")})
+                continue
+            payload_assets.append({
+                "id": asset.id,
+                "name": asset.name,
+                "url": storage.url_for(asset.path),
+                "size": asset.size,
+                "mime": asset.mime,
+            })
 
         payload = {
             "runId": run.id,
@@ -61,10 +81,7 @@ async def create_run_for_item(item_id: str, *, claimed_by: str) -> dict | None:
             "caseName": item.case_name,
             "platform": item.platform or "chrome",
             "runContent": item.run_content,
-            "assets": [
-                {"name": name, "url": storage.url_for(f"assets/{name}")}
-                for name in list(item.assets or [])
-            ],
+            "assets": payload_assets,
             "functionMapContext": run.function_map_context,
             "siteDirectory": site_directory,
             "storageState": None,

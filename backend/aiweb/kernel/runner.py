@@ -71,6 +71,7 @@ class WebVLMRunner:
         goal: str,
         has_assets: bool,
         *,
+        assets: list[dict] | None = None,
         function_map_context: str | None = None,
         site_directory: str | None = None,
         on_step: OnStep,
@@ -83,7 +84,7 @@ class WebVLMRunner:
         provider = (self.settings.vlm_provider or "doubao").strip().lower()
         is_cu = provider in ("claude", "anthropic", "openai", "gpt")
         system_prompt = build_system_prompt_for_backend(
-            provider, goal, has_assets=has_assets,
+            provider, goal, has_assets=has_assets, assets=assets,
             function_map_context=function_map_context, site_directory=site_directory,
         )
         vlm = create_main_vlm(system_prompt)
@@ -124,6 +125,8 @@ class WebVLMRunner:
                 segments += 1
 
             await self._wait_stable()
+            browser_state_before = await self.executor.browser_state(consume_events=True)
+            vlm.add_hint(self._browser_state_hint(browser_state_before))
             shot = await self._screenshot()
             if shot is None:
                 consecutive_shot_fail += 1
@@ -150,10 +153,29 @@ class WebVLMRunner:
             label = chain[0].get("action", "unknown")
             history_lines.append(f"{step_no}. {label}: {(thought or '')[:80]}")
 
+            # VLM 生成动作时，网站仍可能异步打开/关闭标签。若环境已变化，
+            # 不执行基于旧截图的动作，先把新事实和截图交回 VLM，避免重复点击。
+            browser_state_before_execute = await self.executor.browser_state(consume_events=True)
+            if browser_state_before_execute.get("opened_tab_ids") or browser_state_before_execute.get("closed_tab_ids"):
+                vlm.add_hint(
+                    "浏览器状态在你生成本轮动作期间发生了变化；本轮未执行原动作，请基于以下最新状态重新判断。\n"
+                    + self._browser_state_hint(browser_state_before_execute)
+                )
+                after_shot = await self._screenshot()
+                await on_step(self._step(
+                    step_no, label, thought, chain, shot, after_shot, decision.usage, elapsed,
+                    browser_state_before=browser_state_before,
+                    browser_state_after=browser_state_before_execute,
+                    action_results=[],
+                    skipped_reason="浏览器标签状态在 VLM 决策期间变化，避免按旧截图执行动作",
+                ))
+                prev_shot = shot
+                continue
+
             # 执行动作链：非终态顺序执行，遇终态停下
             terminal = None
             after_shot = None
-            new_tab_any = False
+            action_results: list[dict] = []
             exec_failed: str | None = None
             for pa in chain:
                 act = pa.get("action", "unknown")
@@ -162,8 +184,13 @@ class WebVLMRunner:
                     break
                 try:
                     res = await self.executor.execute(pa)
-                    if res.get("new_tab"):
-                        new_tab_any = True
+                    action_results.append(res)
+                    if not res.get("success", True):
+                        vlm.add_hint(f"动作 {act} 未执行：{res.get('error', '未知原因')}。请依据当前浏览器状态选择下一步。")
+                        break
+                    if act == "upload_file":
+                        name = res.get("asset_name") or pa.get("name") or "指定素材"
+                        vlm.add_hint(f"已将素材 {name} 注入当前页面的上传控件；请根据下一张截图确认页面是否已完成上传。")
                 except UnknownAction:
                     vlm.add_hint(
                         f"动作 '{act}' 不被支持。屏幕交互用 click/type/scroll/drag/hotkey；"
@@ -174,16 +201,23 @@ class WebVLMRunner:
                     break
 
             if exec_failed:
-                await on_step(self._step(step_no, label, thought, chain, shot, None, decision.usage, elapsed))
+                await on_step(self._step(
+                    step_no, label, thought, chain, shot, None, decision.usage, elapsed,
+                    browser_state_before=browser_state_before, action_results=action_results,
+                ))
                 return RunResult(status="failed", steps=step_no, token_usage=self._usage(vlm),
                                  fail_reason=exec_failed, segments=segments)
 
-            if new_tab_any:
-                vlm.add_hint(f"步骤 {step_no} 操作后切换到了新标签页，当前截图为新标签内容，请判断是否达成目标。")
+            browser_state_after = await self.executor.browser_state(consume_events=False)
             if terminal is None:
                 after_shot = await self._screenshot()
 
-            await on_step(self._step(step_no, label, thought, chain, shot, after_shot, decision.usage, elapsed))
+            await on_step(self._step(
+                step_no, label, thought, chain, shot, after_shot, decision.usage, elapsed,
+                browser_state_before=browser_state_before,
+                browser_state_after=browser_state_after,
+                action_results=action_results,
+            ))
 
             if terminal is not None:
                 act = terminal.get("action")
@@ -253,14 +287,65 @@ class WebVLMRunner:
             return None
 
     @staticmethod
-    def _step(step_no, action, thought, chain, before, after, usage, elapsed) -> dict:
+    def _browser_state_hint(state: dict) -> str:
+        """把浏览器事实随截图交给 VLM；不替 VLM 决定是否切换。"""
+        current = state.get("current_tab_id") or "未知"
+        rows = []
+        for tab in state.get("tabs") or []:
+            tab_id = tab.get("tab_id") or "未知"
+            marker = "（当前）" if tab.get("is_current") else ""
+            title = (tab.get("title") or "").strip()
+            url = (tab.get("url") or "").strip()
+            identity = title or url or "页面信息暂不可用"
+            rows.append(f"- {tab_id}{marker}: {identity}")
+        opened = state.get("opened_tab_ids") or []
+        closed = state.get("closed_tab_ids") or []
+        event_lines = []
+        if opened:
+            event_lines.append(f"本轮新增标签：{', '.join(opened)}")
+        if closed:
+            event_lines.append(f"本轮关闭标签：{', '.join(closed)}")
+        events = "；".join(event_lines) if event_lines else "本轮无标签新增或关闭"
+        tab_list = "\n".join(rows) or "- 无可用标签"
+        return (
+            "浏览器标签状态（与当前截图同时生效）：\n"
+            f"当前标签：{current}\n"
+            f"{events}\n"
+            "标签列表：\n"
+            f"{tab_list}\n"
+            "新开标签不会自动切换。若任务需要进入某页，使用 switch_tab(tab_id='...')；"
+            "若当前截图仍为原页，继续留在当前标签或自行切换。"
+        )
+
+    @staticmethod
+    def _step(
+        step_no,
+        action,
+        thought,
+        chain,
+        before,
+        after,
+        usage,
+        elapsed,
+        *,
+        browser_state_before: dict | None = None,
+        browser_state_after: dict | None = None,
+        action_results: list[dict] | None = None,
+        skipped_reason: str | None = None,
+    ) -> dict:
         primary = chain[0] if chain else {}
         return {
             "step_no": step_no,
             "action": action,
             "thought": thought,
             "action_raw": primary.get("raw"),
-            "action_detail": {"chain": chain},
+            "action_detail": {
+                "chain": chain,
+                "results": action_results or [],
+                "browser_state_before": browser_state_before,
+                "browser_state_after": browser_state_after,
+                "skipped_reason": skipped_reason,
+            },
             "screenshot_before": before,
             "screenshot_after": after,
             "token_usage": usage,

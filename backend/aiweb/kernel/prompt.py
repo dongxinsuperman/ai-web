@@ -11,22 +11,23 @@ def build_system_prompt_for_backend(
     provider: str,
     goal: str,
     has_assets: bool = False,
+    assets: list[dict] | None = None,
     function_map_context: str | None = None,
     site_directory: str | None = None,
 ) -> str:
     p = (provider or "doubao").strip().lower()
     if p in ("claude", "anthropic", "openai", "gpt"):
         return build_system_prompt_cu(
-            goal, has_assets=has_assets, function_map_context=function_map_context,
+            goal, has_assets=has_assets, assets=assets, function_map_context=function_map_context,
             site_directory=site_directory,
         )
     return build_system_prompt(
-        goal, has_assets=has_assets, function_map_context=function_map_context,
+        goal, has_assets=has_assets, assets=assets, function_map_context=function_map_context,
         site_directory=site_directory,
     )
 
 
-def _shared_blocks(goal, function_map_context, site_directory, has_assets):
+def _shared_blocks(goal, function_map_context, site_directory, has_assets, assets):
     instruction = (
         f"{goal}\n\n"
         "⚠️ 完成铁律：宣告完成前，必须从当前截图中看到明确视觉证据证明任务已完成。"
@@ -41,12 +42,31 @@ def _shared_blocks(goal, function_map_context, site_directory, has_assets):
         f"\n\n## 网址簿（任务未给出明确网址时，按关键字打开对应地址；登录态可能已自动注入）\n{site_directory.strip()}"
         if site_directory and site_directory.strip() else ""
     )
-    return instruction, context_block, site_block
+    asset_rows = []
+    for asset in assets or []:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "").strip()
+        if not name:
+            continue
+        detail = []
+        if asset.get("mime"):
+            detail.append(str(asset["mime"]))
+        if asset.get("size") is not None:
+            detail.append(f"{asset['size']} bytes")
+        asset_rows.append(f"- {name}" + (f"（{'，'.join(detail)}）" if detail else ""))
+    asset_block = (
+        "\n\n## 任务素材清单（只读）\n" + "\n".join(asset_rows)
+        if asset_rows
+        else ("\n\n## 任务素材\n本任务带有素材，但未取得可用文件清单。" if has_assets else "")
+    )
+    return instruction, context_block, site_block, asset_block
 
 
 def build_system_prompt_cu(
     goal: str,
     has_assets: bool = False,
+    assets: list[dict] | None = None,
     function_map_context: str | None = None,
     site_directory: str | None = None,
 ) -> str:
@@ -57,8 +77,8 @@ def build_system_prompt_cu(
     浏览器导航/标签/上传（工具做不到）→ 输出文本协议 PLATFORM_ACTION 行。
     终态 → 输出文本协议 FINISHED / ASSERT_FAIL / CALL_USER 行。
     """
-    instruction, context_block, site_block = _shared_blocks(
-        goal, function_map_context, site_directory, has_assets
+    instruction, context_block, site_block, asset_block = _shared_blocks(
+        goal, function_map_context, site_directory, has_assets, assets
     )
     asset_hint = (
         "\n- 上传文件：输出 `PLATFORM_ACTION: upload_file(name='文件名')`，文件名来自任务素材清单。"
@@ -67,7 +87,7 @@ def build_system_prompt_cu(
     return f"""You are operating a desktop web browser to complete a task. You will receive a screenshot each step.
 
 ## Task
-{instruction}{context_block}{site_block}
+{instruction}{context_block}{site_block}{asset_block}
 
 ## How to act
 - Use the `computer` tool for on-screen interactions: click / double_click / right_click / type / scroll / key / drag / wait.
@@ -78,7 +98,7 @@ def build_system_prompt_cu(
 - PLATFORM_ACTION: open_url(url='https://...')      open a URL
 - PLATFORM_ACTION: refresh()                         reload page
 - PLATFORM_ACTION: new_tab()                          open new tab
-- PLATFORM_ACTION: switch_tab(index='1')             switch tab by index
+- PLATFORM_ACTION: switch_tab(tab_id='tab_2')        switch to a tab from browser state
 - PLATFORM_ACTION: close_tab()                        close current tab{asset_hint}
 
 ## Finishing (output a text line):
@@ -88,14 +108,16 @@ def build_system_prompt_cu(
 
 ## Rules
 1. Prefer the computer tool for clicking/typing/scrolling; use PLATFORM_ACTION only for navigation/tabs/upload.
-2. If repeating the same action has no effect, change strategy (scroll to find / different spot / check overlay/popup).
-3. Before FINISHED, verify the expected result is visible in the current screenshot. No guessing.
-4. Keep reasoning concise; you may write thoughts in Chinese."""
+2. A newly opened tab does not automatically become current. Use the browser-state text paired with the screenshot to decide whether to stay or call switch_tab(tab_id='...').
+3. If repeating the same action has no effect, change strategy (scroll to find / different spot / check overlay/popup).
+4. Before FINISHED, verify the expected result is visible in the current screenshot. No guessing.
+5. Keep reasoning concise; you may write thoughts in Chinese."""
 
 
 def build_system_prompt(
     goal: str,
     has_assets: bool = False,
+    assets: list[dict] | None = None,
     function_map_context: str | None = None,
     site_directory: str | None = None,
 ) -> str:
@@ -104,16 +126,8 @@ def build_system_prompt(
         "⚠️ 完成铁律：使用 finished() 前，必须从当前截图中看到明确视觉证据证明任务已完成。"
         "严禁推测。「可能已完成」「应该已完成」= 未完成，必须继续操作。"
     )
-    context_block = (
-        f"\n\n## 执行参考（只读上下文，可能含登录规则 / 测试账号 / 业务术语 / 异常处理；"
-        f"仅作参考，不改变上面的任务目标）\n{function_map_context.strip()}"
-        if function_map_context and function_map_context.strip()
-        else ""
-    )
-    site_block = (
-        f"\n\n## 网址簿（任务未给出明确网址时，按关键字用 open_url 打开对应地址；登录态可能已自动注入）\n{site_directory.strip()}"
-        if site_directory and site_directory.strip()
-        else ""
+    _, context_block, site_block, asset_block = _shared_blocks(
+        goal, function_map_context, site_directory, has_assets, assets
     )
     asset_hint = (
         "\n- 若任务需要上传文件，使用 upload_file(name='文件名')，文件名来自任务提供的素材清单。"
@@ -123,7 +137,7 @@ def build_system_prompt(
     return f"""你是一个浏览器网页操作助手。你会收到浏览器网页的截图，根据用户指令分析当前页面并决定下一步操作。
 
 ## 你的任务
-{instruction}{context_block}{site_block}
+{instruction}{context_block}{site_block}{asset_block}
 
 ## 坐标系统
 - 使用 0-1000 归一化坐标，左上角 (0,0)，右下角 (1000,1000)。
@@ -144,7 +158,7 @@ def build_system_prompt(
 ### 浏览器 / 工具
 - open_url(url='https://...')                     打开网址
 - refresh()                                       刷新
-- new_tab() / switch_tab(index='1') / close_tab() 标签管理
+- new_tab() / switch_tab(tab_id='tab_2') / close_tab() 标签管理；标签状态会随截图提供
 - upload_file(name='文件名')                       上传素材文件{asset_hint}
 - wait()                                          等待页面加载（约 5 秒）
 
@@ -165,5 +179,6 @@ Action: <一个动作调用>
 1. 每次只能输出一个 Action。
 2. 输入文本前必须先 click 输入框聚焦。
 3. 连续操作同一位置无效时，换方式（滚动查找 / 换位置 / 检查弹窗遮挡）。
-4. 导航 / 刷新 / 切标签等浏览器级操作用对应内置动作，不要点地址栏。
-5. Thought 用中文。"""
+4. 新开标签不会自动成为当前标签；结合截图附带的标签状态，自行决定继续当前页还是 switch_tab(tab_id='...')。
+5. 导航 / 刷新 / 切标签等浏览器级操作用对应内置动作，不要点地址栏。
+6. Thought 用中文。"""

@@ -19,6 +19,20 @@ class ActionExecutor:
         self.vw, self.vh = get_settings().viewport_size
         # 最近一次喂给模型的截图尺寸（CU 绝对像素反缩放用）；默认等于视口。
         self.frame_w, self.frame_h = self.vw, self.vh
+        # Page 对象不是可传给模型的稳定标识；运行期间为每页分配 tab_id。
+        self._tab_seq = 0
+        self._tab_ids: dict[int, str] = {}
+        self._tab_pages: dict[int, Page] = {}
+        self._opened_tab_ids: list[str] = []
+        self._closed_tab_ids: list[str] = []
+        for existing in self.context.pages:
+            self._register_tab(existing, opened=False)
+        # 事件用于记录“何时出现过新页”；每轮状态刷新还会兜底扫描 context.pages，
+        # 因此不依赖点击后的单次短时间轮询。
+        try:
+            self.context.on("page", self._on_page_created)
+        except Exception:
+            pass
 
     def set_frame(self, w: int, h: int) -> None:
         if w > 0 and h > 0:
@@ -37,17 +51,88 @@ class ActionExecutor:
         y = max(0.0, min(y, self.vh - 1))
         return x, y
 
-    async def _sync_to_newest_tab(self, before: int) -> bool:
-        """点击可能开新标签：若 pages 增加则切到最新页。返回是否切换。"""
-        await asyncio.sleep(0.5)
-        if len(self.context.pages) > before:
-            self.page = self.context.pages[-1]
+    @staticmethod
+    def _tab_key(page: Page) -> int:
+        return id(page)
+
+    def _register_tab(self, page: Page, *, opened: bool) -> str:
+        key = self._tab_key(page)
+        tab_id = self._tab_ids.get(key)
+        if tab_id and self._tab_pages.get(key) is page:
+            return tab_id
+        self._tab_seq += 1
+        tab_id = f"tab_{self._tab_seq}"
+        self._tab_ids[key] = tab_id
+        self._tab_pages[key] = page
+        if opened:
+            self._opened_tab_ids.append(tab_id)
+        try:
+            page.on("close", lambda *_args, p=page: self._on_page_closed(p))
+        except Exception:
+            pass
+        return tab_id
+
+    def _on_page_created(self, page: Page) -> None:
+        self._register_tab(page, opened=True)
+
+    def _on_page_closed(self, page: Page) -> None:
+        key = self._tab_key(page)
+        tab_id = self._tab_ids.get(key)
+        if tab_id and tab_id not in self._closed_tab_ids:
+            self._closed_tab_ids.append(tab_id)
+        self._tab_pages.pop(key, None)
+
+    def _refresh_tabs(self) -> list[Page]:
+        pages = list(self.context.pages)
+        active = {self._tab_key(p) for p in pages}
+        for candidate in pages:
+            self._register_tab(candidate, opened=True)
+        for key, candidate in list(self._tab_pages.items()):
+            if key not in active:
+                self._on_page_closed(candidate)
+        if pages and self._tab_key(self.page) not in active:
+            # 当前页被网站或显式 close_tab 关闭后，必须选择仍可截图的一页。
+            self.page = pages[0]
+        return pages
+
+    async def browser_state(self, *, consume_events: bool = False) -> dict:
+        """返回当前页、标签清单及本轮以来的新增/关闭事件。"""
+        pages = self._refresh_tabs()
+        tabs = []
+        for candidate in pages:
             try:
-                await self.page.bring_to_front()
+                title = await candidate.title()
             except Exception:
-                pass
-            return True
-        return False
+                title = ""
+            tabs.append({
+                "tab_id": self._register_tab(candidate, opened=True),
+                "title": title,
+                "url": getattr(candidate, "url", "") or "",
+                "is_current": candidate is self.page,
+            })
+        current_tab_id = self._tab_ids.get(self._tab_key(self.page))
+        active_ids = {tab["tab_id"] for tab in tabs}
+        state = {
+            "current_tab_id": current_tab_id,
+            "tabs": tabs,
+            "opened_tab_ids": [tab_id for tab_id in self._opened_tab_ids if tab_id in active_ids],
+            "closed_tab_ids": list(self._closed_tab_ids),
+        }
+        if consume_events:
+            self._opened_tab_ids.clear()
+            self._closed_tab_ids.clear()
+        return state
+
+    def _page_for_tab_id(self, tab_id: str) -> Page | None:
+        self._refresh_tabs()
+        for key, known_id in self._tab_ids.items():
+            if known_id == tab_id:
+                return self._tab_pages.get(key)
+        return None
+
+    @staticmethod
+    def _failed(action: str, error: str, **detail) -> dict:
+        return {"action": action, "success": False, "error": error, **detail}
 
     @staticmethod
     def _to_pw_hotkey(key: str) -> str:
@@ -64,17 +149,15 @@ class ActionExecutor:
         return "+".join(out)
 
     async def execute(self, parsed: dict) -> dict:
-        """执行一个动作；返回 {action, new_tab: bool}。未知动作抛 UnknownAction。"""
+        """执行一个动作；恢复性失败以 success=False 返回，未知动作抛 UnknownAction。"""
         action = parsed.get("action", "unknown")
         cs = parsed.get("coord_space", "normalized")
-        new_tab = False
         page = self.page
+        result_detail: dict = {}
 
         if action == "click":
             x, y = self._abs(parsed.get("point", [500, 500]), cs)
-            before = len(self.context.pages)
             await page.mouse.click(x, y)
-            new_tab = await self._sync_to_newest_tab(before)
 
         elif action == "left_double":
             x, y = self._abs(parsed.get("point", [500, 500]), cs)
@@ -143,35 +226,64 @@ class ActionExecutor:
 
         elif action == "open_url":
             url = parsed.get("url", "")
-            if url:
-                await page.goto(url, wait_until="domcontentloaded")
+            if not url:
+                return self._failed(action, "缺少 url 参数")
+            await page.goto(url, wait_until="domcontentloaded")
 
         elif action == "refresh":
             await page.reload(wait_until="domcontentloaded")
 
         elif action == "new_tab":
             self.page = await self.context.new_page()
-            new_tab = True
+            self._register_tab(self.page, opened=True)
+            await self.page.bring_to_front()
 
         elif action == "switch_tab":
-            idx = parsed.get("index", 0)
-            if 0 <= idx < len(self.context.pages):
-                self.page = self.context.pages[idx]
-                await self.page.bring_to_front()
+            tab_id = parsed.get("tab_id")
+            if tab_id:
+                target = self._page_for_tab_id(tab_id)
+                if target is None:
+                    return self._failed(action, f"标签 {tab_id} 不存在或已关闭", tab_id=tab_id)
+            elif "index" in parsed:
+                # 兼容既有软协议；新提示词和环境状态只使用 tab_id。
+                idx = parsed["index"]
+                pages = self._refresh_tabs()
+                if not (0 <= idx < len(pages)):
+                    return self._failed(action, f"标签序号 {idx} 不存在", index=idx)
+                target = pages[idx]
+                tab_id = self._register_tab(target, opened=True)
+            else:
+                return self._failed(action, "缺少 tab_id 参数")
+            try:
+                await target.bring_to_front()
+            except Exception as exc:
+                return self._failed(action, f"无法切换到标签 {tab_id}: {exc}", tab_id=tab_id)
+            self.page = target
 
         elif action == "close_tab":
             if len(self.context.pages) > 1:
                 await page.close()
                 self.page = self.context.pages[-1]
                 await self.page.bring_to_front()
+            else:
+                return self._failed(action, "当前仅剩一个标签，不能关闭")
 
         elif action == "upload_file":
             name = parsed.get("name", "")
-            local = self.resolve_asset(name)
+            if not name:
+                return self._failed(action, "缺少素材文件名")
+            try:
+                local = self.resolve_asset(name)
+            except Exception as exc:
+                return self._failed(action, f"素材 {name} 不可用: {exc}", asset_name=name)
             inp = await self.page.query_selector("input[type=file]")
             if inp is None:
-                raise RuntimeError(f"页面未找到 input[type=file]，无法上传 {name}（请先触发上传控件）")
-            await inp.set_input_files(local)
+                return self._failed(action, f"页面未找到可用上传控件，无法上传 {name}（请先触发上传入口）", asset_name=name)
+            try:
+                await inp.set_input_files(local)
+            except Exception as exc:
+                return self._failed(action, f"上传 {name} 失败: {exc}", asset_name=name)
+            result_detail["asset_name"] = name
 
         elif action == "wait":
             await asyncio.sleep(5)
@@ -180,7 +292,7 @@ class ActionExecutor:
             raise UnknownAction(action)
 
         await asyncio.sleep(0.4)
-        return {"action": action, "new_tab": new_tab}
+        return {"action": action, "success": True, **result_detail}
 
 
 class UnknownAction(Exception):

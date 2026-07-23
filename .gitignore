@@ -11,6 +11,7 @@ venv/
 backend/.env
 backend/data/
 data/
+backend/agent-assets-*/
 
 # Node / 前端
 node_modules/

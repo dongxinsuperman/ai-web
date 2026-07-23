@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from aiweb.db import session_scope
 from aiweb.models.asset import Asset
+from aiweb.models.base import utcnow
 from aiweb.storage import get_storage
 
 router = APIRouter(tags=["assets"])
@@ -30,12 +31,18 @@ async def upload_asset(file: UploadFile = File(...), name: str | None = Form(def
             existing.path = rel
             existing.size = len(data)
             existing.mime = file.content_type
+            # 同名、同大小、同 MIME 也可能是新内容；必须刷新同步依据。
+            existing.updated_at = utcnow()
             asset = existing
         else:
             asset = Asset(name=asset_name, path=rel, size=len(data), mime=file.content_type)
             s.add(asset)
         await s.flush()
-        return {"id": asset.id, "name": asset.name, "url": storage.url_for(rel), "size": asset.size, "mime": asset.mime}
+        return {
+            "id": asset.id, "name": asset.name, "url": storage.url_for(rel),
+            "size": asset.size, "mime": asset.mime,
+            "createdAt": asset.created_at.isoformat(), "updatedAt": asset.updated_at.isoformat(),
+        }
 
 
 @router.get("/assets", dependencies=[_guard()])
@@ -45,7 +52,8 @@ async def list_assets():
         rows = (await s.execute(select(Asset).order_by(Asset.created_at.desc()))).scalars().all()
         return [{
             "id": a.id, "name": a.name, "url": storage.url_for(a.path),
-            "size": a.size, "mime": a.mime, "createdAt": a.created_at.isoformat(),
+            "size": a.size, "mime": a.mime,
+            "createdAt": a.created_at.isoformat(), "updatedAt": a.updated_at.isoformat(),
         } for a in rows]
 
 

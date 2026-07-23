@@ -48,7 +48,7 @@ async def parse_and_validate(session, payload: dict) -> Submission:
 
     seen: set[tuple[str, str]] = set()  # (caseId, platform) 唯一
     # 预取素材名集合，用于校验 assets 引用
-    asset_names = {a.name for a in (await session.execute(select(Asset.name))).scalars()}
+    asset_names = set((await session.execute(select(Asset.name))).scalars().all())
     # 当前启用的浏览器引擎（台数>0），用于校验 platform
     enabled_engines = set((await get_slots(session)).keys())
 

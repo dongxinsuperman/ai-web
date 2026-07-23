@@ -10,8 +10,7 @@ import base64
 import json
 import logging
 import os
-import shutil
-import tempfile
+from datetime import datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -50,23 +49,58 @@ def _ws_url(server: str, token: str | None) -> str:
     return f"{base}/api/browser-agents/ws{qs}"
 
 
-async def _download_assets(run_id: str, assets: list[dict], token: str | None) -> tuple[str, dict[str, str]]:
-    root = tempfile.mkdtemp(prefix=f"aiweb-agent-{run_id}-")
-    out: dict[str, str] = {}
+def _asset_path(root: str, name: str) -> str:
+    return os.path.join(root, os.path.basename(name))
+
+
+def _needs_asset_sync(path: str, updated_at: str | None) -> bool:
+    """缺文件或 Server 版本更新时才重新下载；Server 删除不会删除本地缓存。"""
+    if not os.path.isfile(path) or not updated_at:
+        return True
+    try:
+        remote_ts = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).timestamp()
+        return remote_ts > os.path.getmtime(path)
+    except (TypeError, ValueError, OSError):
+        return True
+
+
+async def _sync_asset_directory(server: str, token: str | None, root: str) -> tuple[list[dict], dict[str, str]]:
+    """复用素材列表 API，把 Server 素材增量同步到 Agent 的持久目录。"""
+    os.makedirs(root, exist_ok=True)
+    base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
+    out: dict[str, str] = {}
     async with httpx.AsyncClient(timeout=60, headers=headers) as client:
-        for asset in assets or []:
-            name = asset.get("name")
-            url = asset.get("url")
+        response = await client.get(f"{base}/api/assets")
+        response.raise_for_status()
+        assets = response.json()
+        if not isinstance(assets, list):
+            raise RuntimeError("素材列表响应格式错误")
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "").strip()
+            url = str(asset.get("url") or "").strip()
             if not name or not url:
                 continue
-            path = os.path.join(root, os.path.basename(name))
-            resp = await client.get(url)
-            resp.raise_for_status()
-            with open(path, "wb") as f:
-                f.write(resp.content)
+            path = _asset_path(root, name)
+            if _needs_asset_sync(path, asset.get("updatedAt")):
+                part = f"{path}.part"
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    with open(part, "wb") as f:
+                        f.write(resp.content)
+                    updated_at = asset.get("updatedAt")
+                    if updated_at:
+                        ts = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00")).timestamp()
+                        os.utime(part, (ts, ts))
+                    os.replace(part, path)
+                finally:
+                    if os.path.exists(part):
+                        os.remove(part)
             out[name] = path
-    return root, out
+    return assets, out
 
 
 def _encode_step(step: dict) -> dict:
@@ -79,20 +113,31 @@ def _encode_step(step: dict) -> dict:
 
 
 class BrowserAgent:
-    def __init__(self, *, server: str, agent_id: str, token: str | None, name: str | None) -> None:
+    def __init__(self, *, server: str, agent_id: str, token: str | None, name: str | None, asset_dir: str) -> None:
         self.server = server
         self.agent_id = agent_id
         self.token = token
         self.name = name
+        self.asset_dir = os.path.abspath(asset_dir)
+        self.asset_sync_lock = asyncio.Lock()
         self.cancel_events: dict[str, asyncio.Event] = {}
         self.tasks: dict[str, asyncio.Task] = {}
         self.send_lock = asyncio.Lock()
 
+    async def _sync_assets(self) -> tuple[list[dict], dict[str, str]]:
+        # 一台 Agent 可并发跑多浏览器；同一时刻只允许一个任务更新共享素材目录。
+        async with self.asset_sync_lock:
+            return await _sync_asset_directory(self.server, self.token, self.asset_dir)
+
     async def run_forever(self) -> None:
         await browser_manager.start()
+        initial_sync_pending = True
         try:
             while True:
                 try:
+                    if initial_sync_pending:
+                        await self._sync_assets()
+                        initial_sync_pending = False
                     await self._connect_once()
                 except asyncio.CancelledError:
                     raise
@@ -143,9 +188,8 @@ class BrowserAgent:
 
     async def _run_one(self, ws, payload: dict) -> None:
         run_id = payload["runId"]
-        asset_root = None
         try:
-            asset_root, asset_map = await _download_assets(run_id, payload.get("assets") or [], self.token)
+            workspace_assets, asset_map = await self._sync_assets()
 
             def resolve_asset(name: str) -> str:
                 path = asset_map.get(name)
@@ -171,7 +215,7 @@ class BrowserAgent:
                     "step": _encode_step(step),
                 })
 
-            local_payload = dict(payload)
+            local_payload = {**payload, "assets": workspace_assets}
             result, elapsed_ms = await self._execute(
                 local_payload, resolve_asset, send_step, send_heartbeat, should_cancel, step_counter
             )
@@ -200,8 +244,6 @@ class BrowserAgent:
             })
         finally:
             self.cancel_events.pop(run_id, None)
-            if asset_root:
-                shutil.rmtree(asset_root, ignore_errors=True)
 
     async def _auth_check(self, ws, payload: dict) -> None:
         request_id = payload["requestId"]
@@ -301,8 +343,16 @@ def main() -> None:
     parser.add_argument("--agent-id", required=True, help="Agent id controlled by Server config, e.g. win-01")
     parser.add_argument("--token", default=os.getenv("AIWEB_API_TOKEN") or "")
     parser.add_argument("--name", default=None)
+    parser.add_argument(
+        "--asset-dir",
+        default=os.getenv("AIWEB_AGENT_ASSET_DIR"),
+        help="Agent 持久素材目录；启动时全量同步，任务前仅新增或按 updatedAt 覆盖更新",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s | %(message)s")
-    agent = BrowserAgent(server=args.server, agent_id=args.agent_id, token=args.token or None, name=args.name)
+    agent = BrowserAgent(
+        server=args.server, agent_id=args.agent_id, token=args.token or None,
+        name=args.name, asset_dir=args.asset_dir or f"./agent-assets-{args.agent_id}",
+    )
     asyncio.run(agent.run_forever())

@@ -177,6 +177,18 @@ class WebVLMRunner:
             after_shot = None
             action_results: list[dict] = []
             exec_failed: str | None = None
+            if any(pa.get("action") == "bash" for pa in chain) and len(chain) != 1:
+                error = "bash 必须独占一轮，不能与其他动作同时执行"
+                vlm.add_hint(error + "。请重新输出单独的 bash 动作，等待结果后再决定下一步。")
+                await on_step(self._step(
+                    step_no, label, thought, chain, shot, shot, decision.usage, elapsed,
+                    browser_state_before=browser_state_before,
+                    browser_state_after=browser_state_before_execute,
+                    action_results=[{"action": "bash", "success": False, "error": error}],
+                    skipped_reason=error,
+                ))
+                prev_shot = shot
+                continue
             for pa in chain:
                 act = pa.get("action", "unknown")
                 if act in A.TERMINAL_ACTIONS:
@@ -185,17 +197,22 @@ class WebVLMRunner:
                 try:
                     res = await self.executor.execute(pa)
                     action_results.append(res)
+                    if act == "bash":
+                        vlm.add_hint(self._bash_result_hint(res))
                     if not res.get("success", True):
-                        vlm.add_hint(f"动作 {act} 未执行：{res.get('error', '未知原因')}。请依据当前浏览器状态选择下一步。")
+                        if act != "bash":
+                            vlm.add_hint(f"动作 {act} 未执行：{res.get('error', '未知原因')}。请依据当前浏览器状态选择下一步。")
                         break
                     if act == "upload_file":
                         name = res.get("asset_name") or pa.get("name") or "指定素材"
                         vlm.add_hint(f"已将素材 {name} 注入当前页面的上传控件；请根据下一张截图确认页面是否已完成上传。")
                 except UnknownAction:
-                    vlm.add_hint(
+                    error = pa.get("error") or (
                         f"动作 '{act}' 不被支持。屏幕交互用 click/type/scroll/drag/hotkey；"
-                        "导航/标签/上传用 PLATFORM_ACTION:（如 open_url/new_tab/switch_tab/upload_file）。"
+                        "导航/标签/上传/Bash 用对应平台动作。"
                     )
+                    action_results.append({"action": act, "success": False, "error": error})
+                    vlm.add_hint(error)
                 except Exception as e:
                     exec_failed = f"执行失败 [{act}]: {e}"
                     break
@@ -268,6 +285,23 @@ class WebVLMRunner:
             return vlm.counter.summary()
         except Exception:
             return {}
+
+    @staticmethod
+    def _bash_result_hint(result: dict) -> str:
+        if not result.get("success", True):
+            return f"Bash 执行失败：{result.get('error', '未知原因')}。请根据错误决定下一步。"
+        stdout = result.get("stdout") or "（空）"
+        stderr = result.get("stderr") or "（空）"
+        stdout_suffix = "（输出已截断）" if result.get("stdout_truncated") else ""
+        stderr_suffix = "（输出已截断）" if result.get("stderr_truncated") else ""
+        return (
+            "Bash 执行结果：\n"
+            f"exit_code={result.get('exit_code')}\n"
+            f"stdout{stdout_suffix}:\n{stdout}\n"
+            f"stderr{stderr_suffix}:\n{stderr}\n"
+            f"elapsed_ms={result.get('elapsed_ms')}\n"
+            "请根据该结果决定下一步。"
+        )
 
     async def _wait_stable(self) -> None:
         page = self.executor.page

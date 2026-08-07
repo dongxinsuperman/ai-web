@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import subprocess
+import time
 from collections.abc import Callable
 
 from playwright.async_api import BrowserContext, Page
@@ -9,6 +13,66 @@ from playwright.async_api import BrowserContext, Page
 from aiweb.settings import get_settings
 
 _MODIFIERS = {"ctrl": "Control", "control": "Control", "shift": "Shift", "alt": "Alt", "meta": "Meta", "cmd": "Meta", "command": "Meta"}
+_BASH_TIMEOUT_SEC = 60
+_BASH_TERMINATE_GRACE_SEC = 5
+_BASH_OUTPUT_MAX_CHARS = 12000
+
+
+def _decode_bash_output(raw: bytes) -> tuple[str, bool]:
+    text = raw.decode("utf-8", errors="replace")
+    if len(text) <= _BASH_OUTPUT_MAX_CHARS:
+        return text, False
+    return text[:_BASH_OUTPUT_MAX_CHARS], True
+
+
+def _bash_process_options(platform: str | None = None) -> dict:
+    platform_name = platform or os.name
+    if platform_name == "posix":
+        return {"start_new_session": True}
+    if platform_name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {}
+
+
+def _kill_process_only(process) -> None:
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
+async def _terminate_process_tree(process, platform: str | None = None) -> str | None:
+    """终止 Bash 及其子进程；失败时返回会随工具结果上报的明确说明。"""
+    platform_name = platform or os.name
+    if platform_name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            return None
+        except ProcessLookupError:
+            return None
+        except Exception as exc:
+            _kill_process_only(process)
+            return f"终止 Bash 进程组失败，已仅终止 Bash: {exc}"
+
+    if platform_name == "nt":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/PID", str(process.pid), "/T", "/F",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await killer.communicate()
+            if killer.returncode == 0:
+                return None
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            _kill_process_only(process)
+            return f"taskkill 未能终止完整进程树，已仅终止 Bash: {detail or killer.returncode}"
+        except Exception as exc:
+            _kill_process_only(process)
+            return f"终止 Bash 进程树失败，已仅终止 Bash: {exc}"
+
+    _kill_process_only(process)
+    return None
 
 
 class ActionExecutor:
@@ -284,6 +348,54 @@ class ActionExecutor:
             except Exception as exc:
                 return self._failed(action, f"上传 {name} 失败: {exc}", asset_name=name)
             result_detail["asset_name"] = name
+
+        elif action == "bash":
+            command = parsed.get("command", "")
+            if not isinstance(command, str) or not command.strip():
+                return self._failed(action, parsed.get("error") or "缺少 command 参数")
+            started = time.monotonic()
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "bash", "-c", command,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    **_bash_process_options(),
+                )
+            except Exception as exc:
+                return self._failed(action, f"无法启动 Bash: {exc}")
+            try:
+                stdout_raw, stderr_raw = await asyncio.wait_for(
+                    process.communicate(), timeout=_BASH_TIMEOUT_SEC
+                )
+            except TimeoutError:
+                termination_error = await _terminate_process_tree(process)
+                drain_error = None
+                try:
+                    await asyncio.wait_for(
+                        process.communicate(), timeout=_BASH_TERMINATE_GRACE_SEC
+                    )
+                except TimeoutError:
+                    drain_error = f"终止后输出管道仍未在 {_BASH_TERMINATE_GRACE_SEC:g} 秒内关闭"
+                details = "；".join(x for x in (termination_error, drain_error) if x)
+                error = f"Bash 执行超过 {_BASH_TIMEOUT_SEC} 秒"
+                if details:
+                    error += f"；{details}"
+                return self._failed(
+                    action,
+                    error,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                )
+            stdout, stdout_truncated = _decode_bash_output(stdout_raw)
+            stderr, stderr_truncated = _decode_bash_output(stderr_raw)
+            result_detail.update({
+                "exit_code": process.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "stdout_truncated": stdout_truncated,
+                "stderr_truncated": stderr_truncated,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            })
 
         elif action == "wait":
             await asyncio.sleep(5)

@@ -74,7 +74,7 @@ def build_system_prompt_cu(
 
     坐标：绝对像素（相对你看到的截图，**不要**归一化到 0-1000）。
     屏幕交互（点击/输入/滚动/按键）→ 用 computer 工具。
-    浏览器导航/标签/上传（工具做不到）→ 输出文本协议 PLATFORM_ACTION 行。
+    浏览器导航/标签/上传/Bash（工具做不到）→ 输出文本协议 PLATFORM_ACTION 行。
     终态 → 输出文本协议 FINISHED / ASSERT_FAIL / CALL_USER 行。
     """
     instruction, context_block, site_block, asset_block = _shared_blocks(
@@ -94,12 +94,13 @@ def build_system_prompt_cu(
 - Coordinates are ABSOLUTE PIXELS relative to the screenshot you see. Do NOT normalize to 0-1000.
 - Type text only after clicking the target input to focus it.
 
-## Browser navigation (the computer tool cannot do these) — output a text line, exactly one per line:
+## Non-screen actions (the computer tool cannot do these) — output a text line, exactly one per line:
 - PLATFORM_ACTION: open_url(url='https://...')      open a URL
 - PLATFORM_ACTION: refresh()                         reload page
 - PLATFORM_ACTION: new_tab()                          open new tab
 - PLATFORM_ACTION: switch_tab(tab_id='tab_2')        switch to a tab from browser state
-- PLATFORM_ACTION: close_tab()                        close current tab{asset_hint}
+- PLATFORM_ACTION: close_tab()                        close current tab
+- PLATFORM_ACTION: bash(command='...')                run a Bash command on the Agent and return its result{asset_hint}
 
 ## Finishing (output a text line):
 - FINISHED: <reason>        task done AND assertion passed
@@ -107,11 +108,14 @@ def build_system_prompt_cu(
 - CALL_USER: <reason>       cannot proceed, human needed
 
 ## Rules
-1. Prefer the computer tool for clicking/typing/scrolling; use PLATFORM_ACTION only for navigation/tabs/upload.
+1. Prefer the computer tool for clicking/typing/scrolling; use PLATFORM_ACTION only for navigation/tabs/upload/bash.
 2. A newly opened tab does not automatically become current. Use the browser-state text paired with the screenshot to decide whether to stay or call switch_tab(tab_id='...').
 3. If repeating the same action has no effect, change strategy (scroll to find / different spot / check overlay/popup).
 4. Before FINISHED, verify the expected result is visible in the current screenshot. No guessing.
-5. Keep reasoning concise; you may write thoughts in Chinese."""
+5. A bash action must be the only action in its turn. Write the command on one line and escape embedded newlines as `\\n`; wait for its result before deciding the next action.
+6. If a Bash command contains single quotes, wrap the command parameter in double quotes, for example `bash(command="psql -c 'select id from users'")`; otherwise escape any quote matching the outer delimiter.
+7. Bash commands are non-interactive. Include all required flags and input in the command; do not wait for keyboard input or password prompts.
+8. Keep reasoning concise; you may write thoughts in Chinese."""
 
 
 def build_system_prompt(
@@ -160,6 +164,7 @@ def build_system_prompt(
 - refresh()                                       刷新
 - new_tab() / switch_tab(tab_id='tab_2') / close_tab() 标签管理；标签状态会随截图提供
 - upload_file(name='文件名')                       上传素材文件{asset_hint}
+- bash(command='命令')                             在 Agent 上执行 Bash，下一轮会收到执行结果
 - wait()                                          等待页面加载（约 5 秒）
 
 ### 终止
@@ -181,4 +186,7 @@ Action: <一个动作调用>
 3. 连续操作同一位置无效时，换方式（滚动查找 / 换位置 / 检查弹窗遮挡）。
 4. 新开标签不会自动成为当前标签；结合截图附带的标签状态，自行决定继续当前页还是 switch_tab(tab_id='...')。
 5. 导航 / 刷新 / 切标签等浏览器级操作用对应内置动作，不要点地址栏。
-6. Thought 用中文。"""
+6. bash 必须独占一轮，命令写在同一行，内部换行写成 \\n；收到执行结果后再决定下一步。
+7. Bash 命令含单引号时，用双引号包裹 command，例如 `bash(command="psql -c 'select id from users'")`；否则必须转义与外层相同的引号。
+8. Bash 命令必须是非交互式的，所需参数和输入全部写在命令中，不要等待键盘输入或密码提示。
+9. Thought 用中文。"""

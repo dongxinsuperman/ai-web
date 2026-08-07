@@ -27,6 +27,7 @@ _ALIAS_GROUPS: dict[str, list[str]] = {
     "switch_tab": ["switch_tab", "switchtab", "select_tab"],
     "close_tab": ["close_tab", "closetab"],
     "upload_file": ["upload_file", "upload", "set_input_files", "uploadfile"],
+    "bash": ["bash"],
     "finished": ["finished", "done", "complete", "finish"],
     "assert_fail": ["assert_fail", "fail", "assertion_failed", "assert_failed"],
     "call_user": ["call_user", "calluser", "ask_user", "need_human"],
@@ -57,8 +58,8 @@ def extract_action(content: str) -> str:
     m = re.search(r"Action:\s*(.+)", content, re.DOTALL)
     if m:
         return m.group(1).strip()
-    # 没有 Action 段：兜底为 finished，避免崩溃
-    return f"finished(content='无法解析决策输出: {content[:120]}')"
+    # 缺少 Action 不是任务完成；返回不可解析文本，让 parse_action 保留明确错误。
+    return "无法解析决策输出：缺少 Action 行"
 
 
 def extract_actions(content: str) -> list[str]:
@@ -82,19 +83,57 @@ def _extract_point(s: str) -> list[int] | None:
     return None
 
 
+def _parse_bash_command(params: str) -> tuple[str | None, str | None]:
+    """解析完整的 ``command='...'`` 参数，拒绝尾部残留导致的静默截断。"""
+    match = re.match(r"\s*command\s*=\s*(['\"])", params)
+    if match is None:
+        return None, "bash 缺少带引号的 command 参数"
+    quote = match.group(1)
+    out: list[str] = []
+    i = match.end()
+    while i < len(params):
+        char = params[i]
+        if char == quote:
+            remainder = params[i + 1:].strip()
+            if remainder:
+                return None, (
+                    "bash command 参数在结束引号后仍有内容；"
+                    "命令含单引号时请使用双引号包裹 command，或转义与外层相同的引号"
+                )
+            return "".join(out), None
+        if char == "\\" and i + 1 < len(params):
+            nxt = params[i + 1]
+            if nxt == "n":
+                out.append("\n")
+            elif nxt == "r":
+                out.append("\r")
+            elif nxt == "t":
+                out.append("\t")
+            elif nxt in (quote, "\\"):
+                out.append(nxt)
+            else:
+                out.extend(("\\", nxt))
+            i += 2
+            continue
+        out.append(char)
+        i += 1
+    return None, "bash command 参数缺少结束引号"
+
+
 def parse_action(action_str: str) -> dict:
     """把模型输出的 Action 文本解析为统一动作对象。
 
     返回示例：{"action": "click", "point": [500, 800], "raw": "click(point=...)"}
     """
     raw = action_str.strip()
+    # 延续既有容错：允许动作调用前有少量模型说明文字。
     fn_match = re.search(r"(\w+)\s*\((.*)\)\s*$", raw, re.DOTALL)
     if not fn_match:
         # 非函数式：尝试裸动作名（如 "wait" / "finished"）
         bare = re.match(r"^(\w+)\s*$", raw)
         if bare:
             return {"action": normalize_action(bare.group(1)), "raw": raw}
-        return {"action": "finished", "content": f"无法解析 Action: {raw[:120]}", "raw": raw}
+        return {"action": "unknown", "error": f"无法解析 Action: {raw[:120]}", "raw": raw}
 
     action = normalize_action(fn_match.group(1))
     params = fn_match.group(2).strip()
@@ -150,6 +189,13 @@ def parse_action(action_str: str) -> dict:
         nm = re.search(r"name\s*=\s*'([^']*)'", params) or re.search(r"name\s*=\s*\"([^\"]*)\"", params)
         if nm:
             result["name"] = nm.group(1)
+
+    if action == "bash":
+        command, error = _parse_bash_command(params)
+        if command is not None:
+            result["command"] = command
+        if error is not None:
+            result["error"] = error
 
     return result
 

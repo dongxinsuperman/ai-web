@@ -12,6 +12,8 @@ backend/.env
 backend/data/
 data/
 backend/agent-assets-*/
+# 本地方案草案（不提交到 Git）
+plans/
 
 # Node / 前端
 node_modules/

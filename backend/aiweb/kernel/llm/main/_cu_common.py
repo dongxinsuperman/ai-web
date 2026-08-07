@@ -1,8 +1,8 @@
 """Claude / GPT computer-use 共用工具：截图尺寸、键名映射、文本协议解析。
 
 与 ai-phone 不同：AI Web 是浏览器，按键映射到 Playwright 键名；PLATFORM_ACTION
-承载浏览器导航（open_url / new_tab / switch_tab / close_tab / refresh /
-upload_file），内联调用直接复用 kernel/actions.parse_action 解析。
+承载非屏幕动作（open_url / new_tab / switch_tab / close_tab / refresh /
+upload_file / bash），内联调用直接复用 kernel/actions.parse_action 解析。
 """
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ ASSERT_FAIL_RE = re.compile(r"^\s*ASSERT_FAIL\s*[:：]\s*(.*)$", re.IGNORECASE |
 CALL_USER_RE = re.compile(r"^\s*CALL_USER\s*[:：]\s*(.*)$", re.IGNORECASE | re.MULTILINE)
 # 浏览器导航文本协议：PLATFORM_ACTION: open_url(url='...') 等
 PLATFORM_ACTION_RE = re.compile(r"^\s*PLATFORM_ACTION\s*[:：]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
-# 允许通过 PLATFORM_ACTION 触发的浏览器级动作（computer tool 做不到）
+# 允许通过 PLATFORM_ACTION 触发的非屏幕动作（computer tool 做不到）
 WEB_PLATFORM_WHITELIST = frozenset(
-    {"open_url", "refresh", "new_tab", "switch_tab", "close_tab", "upload_file"}
+    {"open_url", "refresh", "new_tab", "switch_tab", "close_tab", "upload_file", "bash"}
 )
 
 # X11/xdotool 风格键名 → Playwright 键名

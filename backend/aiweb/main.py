@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from aiweb.api import api_router
 from aiweb.db import init_db
+from aiweb.notifications import notifications
 from aiweb.scheduler.dispatcher import dispatcher
 from aiweb.scheduler.reaper import reaper
 from aiweb.settings import get_settings
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
     logger.info("AI Web 启动中 pod=%s", settings.pod_id)
     await init_db()
     get_storage()  # 确保存储目录就绪
+    await notifications.start()
     await reaper.start()
     await dispatcher.start()
     logger.info("AI Web 就绪 :%s", settings.port)
@@ -34,6 +36,7 @@ async def lifespan(app: FastAPI):
     finally:
         await dispatcher.stop()
         await reaper.stop()
+        await notifications.stop()
         logger.info("AI Web 已停止")
 
 
@@ -49,7 +52,11 @@ app.include_router(api_router)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    broadcast = notifications.status()
+    return {
+        "status": "degraded" if broadcast.get("degraded") else "ok",
+        "broadcast": broadcast,
+    }
 
 
 # 静态文件：报告 / 截图 / 素材

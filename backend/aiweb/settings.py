@@ -107,6 +107,13 @@ class Settings(BaseSettings):
     # Webhook
     webhook_timeout_sec: int = 5
 
+    # 终态广播（stdout / kafka / null）。Kafka 与 Webhook 互不代替。
+    broadcast_backend: str = "stdout"
+    kafka_brokers: str = ""
+    kafka_topic: str = "ai-web.submission.result"
+    kafka_sasl_username: str = ""
+    kafka_sasl_password: str = ""
+
     # 鉴权（留空=匿名）
     api_token: str = ""
 

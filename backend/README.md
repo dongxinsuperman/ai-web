@@ -65,7 +65,8 @@ python tools/probe_actions.py
 | `aiweb/scheduler/` | 队列领取（SKIP LOCKED）/ 并发调度 / worker / 心跳回收 |
 | `aiweb/kernel/` | VLM 决策循环 + 动作解析/别名 + Playwright 执行内核（由 Agent 进程使用） |
 | `aiweb/report/` | 自包含 HTML 报告 |
-| `aiweb/webhook/` | 终态回调 |
+| `aiweb/notifications/` | Kafka 终态广播、通知队列与事件构造 |
+| `aiweb/webhook/` | 终态回调（与 Kafka 独立） |
 | `aiweb/storage/` | 截图 / 报告 / 素材 存储（本地卷） |
 
 ## 接口一览
@@ -79,6 +80,8 @@ python tools/probe_actions.py
 - `GET /health`、静态 `GET /files/...`（报告 / 截图 / 素材）
 
 > 默认端口 8009（避开本机其他服务）。如需改端口，调 `.env` 的 `AIWEB_PORT` 与 `AIWEB_PUBLIC_BASE_URL`，并同步 `web/vite.config.js` 代理目标。
+
+Kafka 默认不真发（`AIWEB_BROADCAST_BACKEND=stdout`）。需广播终态结果时改为 `kafka`，并配置 `AIWEB_KAFKA_BROKERS`。`GET /health` 的 `broadcast` 字段会显示已连接、降级原因、成功数和失败数。Kafka 故障不会回滚任务结果；当前通知队列在内存中，进程突然退出时尚未发出的通知不会自动补发。
 
 `AIWEB_PUBLIC_BASE_URL` 是 Server 生成 `reportUrl` / `summaryReportUrl` / 素材 URL 的公开基址。Agent 只负责执行和回传截图，不生成报告链接；测试/生产环境必须把它配置成调用方和浏览器可访问的 AI Web Server 地址，不能保留默认 `http://127.0.0.1:8009`。
 

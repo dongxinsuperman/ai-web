@@ -25,6 +25,7 @@ class Reaper:
     async def recover_on_startup(self) -> None:
         """启动时回收本 Pod 名下残留 running（进程重启场景）。"""
         pod = self.settings.pod_id
+        terminal_item_ids: list[str] = []
         async with session_scope() as s:
             runs = (await s.execute(
                 select(Run).where(Run.state == RUN_RUNNING, Run.claimed_by == pod)
@@ -37,10 +38,17 @@ class Reaper:
                 if item and item.state == ITEM_RUNNING:
                     item.state = ITEM_QUEUED if item.attempts <= item.retry_max else ITEM_FAILED
                     item.status_reason = "recovered"
+                    if item.state == ITEM_FAILED:
+                        terminal_item_ids.append(item.id)
+        if terminal_item_ids:
+            from aiweb.scheduler.worker import notify_terminal_item
+            for item_id in terminal_item_ids:
+                await notify_terminal_item(item_id)
 
     async def _sweep(self) -> None:
         ttl = self.settings.run_heartbeat_ttl_sec
         deadline = utcnow() - timedelta(seconds=ttl)
+        terminal_item_ids: list[str] = []
         async with session_scope() as s:
             runs = (await s.execute(
                 select(Run).where(Run.state == RUN_RUNNING, Run.heartbeat_at < deadline)
@@ -53,7 +61,13 @@ class Reaper:
                 if item and item.state == ITEM_RUNNING:
                     item.state = ITEM_QUEUED if item.attempts <= item.retry_max else ITEM_FAILED
                     item.status_reason = "heartbeat_timeout"
+                    if item.state == ITEM_FAILED:
+                        terminal_item_ids.append(item.id)
                     logger.warning("回收超时任务 item=%s", item.id)
+        if terminal_item_ids:
+            from aiweb.scheduler.worker import notify_terminal_item
+            for item_id in terminal_item_ids:
+                await notify_terminal_item(item_id)
 
     async def _loop(self) -> None:
         interval = max(30, self.settings.run_heartbeat_ttl_sec // 2)

@@ -6,10 +6,11 @@ from sqlalchemy import select
 
 from aiweb.agent_hub import agent_hub
 from aiweb.db import session_scope
-from aiweb.models.item import (ITEM_CANCELLED, ITEM_QUEUED, ITEM_RUNNING, Item)
+from aiweb.models.item import ITEM_CANCELLED, ITEM_QUEUED, ITEM_RUNNING, Item
 from aiweb.models.run import RUN_RUNNING, Run, RunStep
 from aiweb.models.submission import Submission
 from aiweb.scheduler.service import SubmissionRejected, parse_and_validate
+from aiweb.scheduler.worker import notify_terminal_item
 from aiweb.slots import canon
 
 router = APIRouter(tags=["submissions"])
@@ -125,6 +126,7 @@ async def get_item(
 @router.post("/submissions/{submission_id}/cancel", dependencies=[_guard()])
 async def cancel_submission(submission_id: str):
     stop_runs: list[str] = []
+    terminal_item_ids: list[str] = []
     async with session_scope() as s:
         items = (await s.execute(
             select(Item).where(Item.submission_id == submission_id)
@@ -136,6 +138,7 @@ async def cancel_submission(submission_id: str):
             if it.state == ITEM_QUEUED:
                 it.state = ITEM_CANCELLED
                 it.status_reason = "cancelled"
+                terminal_item_ids.append(it.id)
                 n += 1
             elif it.state == ITEM_RUNNING:
                 it.cancel_requested = True
@@ -150,12 +153,15 @@ async def cancel_submission(submission_id: str):
             await agent_hub.send_stop_run(run_id)
         except Exception:
             pass
+    for item_id in terminal_item_ids:
+        await notify_terminal_item(item_id)
     return {"cancelled": n}
 
 
 @router.post("/submissions/{submission_id}/cases/{case_id}/cancel", dependencies=[_guard()])
 async def cancel_item(submission_id: str, case_id: str, platform: str | None = Query(default=None)):
     stop_runs: list[str] = []
+    terminal_item_ids: list[str] = []
     async with session_scope() as s:
         # 不传 platform = 取消该 case 的全部端；传了只取消指定端
         conds = [Item.submission_id == submission_id, Item.case_id == case_id]
@@ -169,6 +175,7 @@ async def cancel_item(submission_id: str, case_id: str, platform: str | None = Q
             if item.state == ITEM_QUEUED:
                 item.state = ITEM_CANCELLED
                 item.status_reason = "cancelled"
+                terminal_item_ids.append(item.id)
             elif item.state == ITEM_RUNNING:
                 item.cancel_requested = True
                 run = (await s.execute(
@@ -183,4 +190,6 @@ async def cancel_item(submission_id: str, case_id: str, platform: str | None = Q
             await agent_hub.send_stop_run(run_id)
         except Exception:
             pass
+    for item_id in terminal_item_ids:
+        await notify_terminal_item(item_id)
     return {"cases": results}

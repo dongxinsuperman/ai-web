@@ -1,8 +1,8 @@
 """单任务执行生命周期：建 run → 接收 Agent 步骤 → 出报告 → 回调。"""
 from __future__ import annotations
 
-import logging
 import base64
+import logging
 
 from sqlalchemy import select
 
@@ -10,15 +10,19 @@ from aiweb import sites as SITES
 from aiweb.db import session_scope
 from aiweb.function_map_context import merge_function_map_context
 from aiweb.models.asset import Asset
-from aiweb.models.item import (ITEM_CANCELLED, ITEM_FAILED, ITEM_QUEUED, ITEM_RUNNING, ITEM_SUCCESS, Item)
+from aiweb.models.base import utcnow
+from aiweb.models.item import ITEM_CANCELLED, ITEM_FAILED, ITEM_QUEUED, ITEM_RUNNING, ITEM_SUCCESS, Item
 from aiweb.models.run import RUN_FAILED, RUN_RUNNING, RUN_SUCCESS, Run, RunStep
 from aiweb.models.submission import SUB_DONE, Submission
+from aiweb.notifications import (
+    build_item_terminal_event,
+    build_submission_terminal_event,
+    notifications,
+)
 from aiweb.report import build_item_report, build_summary_report
 from aiweb.runtime_config import get_headless
 from aiweb.settings import get_settings
 from aiweb.storage import get_storage
-from aiweb.webhook import fire_item_terminal, fire_submission_terminal
-from aiweb.models.base import utcnow
 
 logger = logging.getLogger("aiweb.worker")
 _TERMINAL_ITEM = {ITEM_SUCCESS, ITEM_FAILED, ITEM_CANCELLED}
@@ -238,17 +242,27 @@ async def finalize_run(run_id: str, result, *, elapsed_ms: int | None = None) ->
         return  # 等待下一轮调度重试，不发终态
 
     # 4. item 终态：刷新批次计数，必要时收口
-    await _refresh_submission(item.submission_id)
-    await _maybe_fire_terminal(run_id, item.id, item.submission_id, callback_url)
+    submission_finished = await _refresh_submission(item.submission_id)
+    await _enqueue_terminal_notifications(
+        run_id,
+        item.id,
+        item.submission_id,
+        callback_url,
+        submission_finished=submission_finished,
+    )
 
 
-async def _refresh_submission(submission_id: str) -> None:
+async def _refresh_submission(submission_id: str) -> bool:
     async with session_scope() as s:
         items = (await s.execute(select(Item).where(Item.submission_id == submission_id))).scalars().all()
         counts: dict[str, int] = {}
         for it in items:
             counts[it.state] = counts.get(it.state, 0) + 1
-        submission = await s.get(Submission, submission_id)
+        submission = (await s.execute(
+            select(Submission).where(Submission.id == submission_id).with_for_update()
+        )).scalars().first()
+        if submission is None:
+            return False
         submission.counts = counts
         all_terminal = all(it.state in _TERMINAL_ITEM for it in items)
         if all_terminal and submission.state != SUB_DONE:
@@ -256,13 +270,57 @@ async def _refresh_submission(submission_id: str) -> None:
             html = build_summary_report(submission, items)
             _, url = get_storage().save_report(submission_id, "_summary.html", html)
             submission.summary_report_url = url
+            return True
+        return False
 
 
-async def _maybe_fire_terminal(run_id, item_id, submission_id, callback_url) -> None:
+async def _enqueue_terminal_notifications(
+    run_id,
+    item_id,
+    submission_id,
+    callback_url,
+    *,
+    submission_finished: bool,
+) -> None:
     async with session_scope() as s:
         item = await s.get(Item, item_id)
-        run = await s.get(Run, run_id)
+        run = await s.get(Run, run_id) if run_id else None
         submission = await s.get(Submission, submission_id)
-    await fire_item_terminal(callback_url, submission=submission, item=item, run=run, result=None)
-    if submission.state == SUB_DONE:
-        await fire_submission_terminal(callback_url, submission=submission)
+        items = []
+        if submission_finished:
+            items = (await s.execute(
+                select(Item).where(Item.submission_id == submission_id).order_by(Item.created_at)
+            )).scalars().all()
+    if item is None or submission is None:
+        logger.error("终态通知构造失败 item=%s submission=%s", item_id, submission_id)
+        return
+    notifications.enqueue(
+        build_item_terminal_event(submission=submission, item=item, run=run),
+        callback_url=callback_url,
+    )
+    if submission_finished:
+        notifications.enqueue(
+            build_submission_terminal_event(submission=submission, items=items),
+            callback_url=callback_url,
+        )
+
+
+async def notify_terminal_item(item_id: str, run_id: str | None = None) -> None:
+    """给取消/回收等非正常 Run 收口路径复用终态广播。"""
+    async with session_scope() as s:
+        item = await s.get(Item, item_id)
+        if item is None or item.state not in _TERMINAL_ITEM:
+            return
+        submission = await s.get(Submission, item.submission_id)
+        if submission is None:
+            return
+        submission_id = submission.id
+        callback_url = submission.callback_url
+    submission_finished = await _refresh_submission(submission_id)
+    await _enqueue_terminal_notifications(
+        run_id,
+        item_id,
+        submission_id,
+        callback_url,
+        submission_finished=submission_finished,
+    )

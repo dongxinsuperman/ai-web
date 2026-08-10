@@ -10,44 +10,28 @@ from aiweb.settings import get_settings
 logger = logging.getLogger("aiweb.webhook")
 
 
-async def _post(url: str | None, payload: dict) -> None:
+async def post_terminal(url: str | None, payload: dict) -> None:
     if not url:
         return
-    if not (url.startswith("http://") or url.startswith("https://")):
+    if not url.startswith(("http://", "https://")):
         logger.warning("跳过非法 callbackUrl: %s", url)
         return
     timeout = get_settings().webhook_timeout_sec
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             await client.post(url, json=payload)
-    except Exception as e:  # best-effort
+    except (httpx.HTTPError, ValueError) as e:  # best-effort
         logger.warning("Webhook 投递失败 %s: %s", url, e)
 
 
 async def fire_item_terminal(url, *, submission, item, run, result) -> None:
-    payload = {
-        "event": "submission.item.terminal",
-        "version": 1,
-        "submissionId": submission.id,
-        "submissionName": submission.name,
-        "itemId": item.id,
-        "caseId": item.case_id,
-        "caseName": item.case_name,
-        "platform": item.platform,
-        "engine": "web-vlm",
-        "state": item.state,
-        "statusReason": item.status_reason,
-        "runId": run.id if run else None,
-        "attempts": item.attempts,
-        "elapsedMs": run.elapsed_ms if run else None,
-        "steps": run.steps if run else 0,
-        "tokenStats": (run.token_usage if run else {}) or {},
-        "reportUrl": item.report_url,
-    }
-    await _post(url, payload)
+    from aiweb.notifications.events import build_item_terminal_event
+
+    await post_terminal(url, build_item_terminal_event(submission=submission, item=item, run=run))
 
 
 async def fire_submission_terminal(url, *, submission) -> None:
+    # 旧入口仅供兼容；新链路使用 notifications.events 构造完整批次事件。
     payload = {
         "event": "submission.terminal",
         "version": 1,
@@ -57,4 +41,4 @@ async def fire_submission_terminal(url, *, submission) -> None:
         "counts": submission.counts or {},
         "summaryReportUrl": submission.summary_report_url,
     }
-    await _post(url, payload)
+    await post_terminal(url, payload)

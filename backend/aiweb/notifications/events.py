@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from aiweb.models.item import Item
 from aiweb.models.run import Run
@@ -21,7 +21,7 @@ def build_item_terminal_event(*, submission: Submission, item: Item, run: Run | 
     return {
         "event": ITEM_TERMINAL_EVENT,
         "version": EVENT_VERSION,
-        "ts": datetime.now(UTC).isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
         "submissionId": submission.id,
         "submissionName": submission.name or submission.id,
         "itemId": item.id,
@@ -60,7 +60,7 @@ def build_submission_terminal_event(
     return {
         "event": SUBMISSION_TERMINAL_EVENT,
         "version": EVENT_VERSION,
-        "ts": datetime.now(UTC).isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),
         "submissionId": submission.id,
         "submissionName": submission.name or submission.id,
         "submissionState": submission.state,

@@ -54,7 +54,8 @@ app.include_router(api_router)
 async def health():
     broadcast = notifications.status()
     return {
-        "status": "degraded" if broadcast.get("degraded") else "ok",
+        # Kafka / Webhook 是旁路通知，不参与主服务存活判定。
+        "status": "ok",
         "broadcast": broadcast,
     }
 

@@ -39,6 +39,15 @@ class NullPublisher(ResultPublisher):
 class StdoutPublisher(ResultPublisher):
     name = "stdout"
 
+    def __init__(
+        self,
+        *,
+        requested_backend: str = "stdout",
+        degraded_reason: str | None = None,
+    ) -> None:
+        self._requested_backend = requested_backend
+        self._degraded_reason = degraded_reason
+
     async def publish_terminal(self, event: dict[str, Any]) -> None:
         try:
             payload = json.dumps(event, ensure_ascii=False, sort_keys=True, default=str)
@@ -46,6 +55,15 @@ class StdoutPublisher(ResultPublisher):
             logger.warning("终态事件 JSON 序列化失败: %s", exc)
             return
         logger.info("[broadcast:stdout] %s", payload)
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "backend": self.name,
+            "requestedBackend": self._requested_backend,
+            "ready": True,
+            "degraded": self._degraded_reason is not None,
+            "reason": self._degraded_reason,
+        }
 
 
 class KafkaPublisher(ResultPublisher):
@@ -181,4 +199,9 @@ def make_publisher(settings: Settings | None = None) -> ResultPublisher:
         return StdoutPublisher()
     if backend in {"null", "none", "off", "disable"}:
         return NullPublisher()
-    raise ValueError(f"不支持的 AIWEB_BROADCAST_BACKEND: {current.broadcast_backend!r}")
+    reason = (
+        f"不支持的 AIWEB_BROADCAST_BACKEND: {current.broadcast_backend!r}；"
+        "已显式回退到 stdout，Kafka 消息不会发送"
+    )
+    logger.error("[broadcast:config:degraded] %s", reason)
+    return StdoutPublisher(requested_backend=backend, degraded_reason=reason)

@@ -6,8 +6,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from aiweb.notifications.publisher import KafkaPublisher, ResultPublisher
+from aiweb.notifications.publisher import KafkaPublisher, ResultPublisher, make_publisher
 from aiweb.notifications.service import NotificationService
+from aiweb.settings import Settings
 
 
 class _CollectingPublisher(ResultPublisher):
@@ -139,6 +140,31 @@ class KafkaPublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(producer.messages[0][2], b"s1")
         self.assertEqual(producer.kwargs["acks"], "all")
         self.assertTrue(producer.kwargs["enable_idempotence"])
+
+    async def test_unknown_backend_falls_back_to_visible_degraded_stdout(self) -> None:
+        settings = Settings(_env_file=None, broadcast_backend="kafak")
+        with self.assertLogs("aiweb.broadcast", level="ERROR"):
+            publisher = make_publisher(settings)
+        self.assertEqual(publisher.name, "stdout")
+        self.assertEqual(publisher.status()["requestedBackend"], "kafak")
+        self.assertTrue(publisher.status()["degraded"])
+        self.assertIn("回退到 stdout", publisher.status()["reason"])
+
+
+class HealthContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_broadcast_degradation_does_not_change_service_health(self) -> None:
+        from aiweb.main import health
+
+        broadcast = {
+            "backend": "kafka",
+            "ready": False,
+            "degraded": True,
+            "reason": "broker unavailable",
+        }
+        with patch("aiweb.main.notifications.status", return_value=broadcast):
+            payload = await health()
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["broadcast"]["degraded"])
 
 
 if __name__ == "__main__":

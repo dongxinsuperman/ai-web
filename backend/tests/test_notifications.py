@@ -3,12 +3,42 @@ from __future__ import annotations
 import asyncio
 import sys
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from aiweb.notifications.publisher import KafkaPublisher, ResultPublisher, make_publisher
 from aiweb.notifications.service import NotificationService
 from aiweb.settings import Settings
+
+
+def _event_models(*, state: str, status_reason: str, fail_reason: str | None):
+    now = datetime.now(timezone.utc)
+    submission = SimpleNamespace(id="s1", name="web smoke")
+    item = SimpleNamespace(
+        id="i1",
+        submission_id="s1",
+        case_id="c1",
+        case_name="login",
+        platform="chrome",
+        run_content="打开登录页并验证个人中心",
+        state=state,
+        status_reason=status_reason,
+        retry_max=1,
+        attempts=1,
+        created_at=now,
+        report_url="https://example.test/report.html",
+    )
+    run = SimpleNamespace(
+        id="r1",
+        fail_reason=fail_reason,
+        started_at=now,
+        finished_at=now,
+        elapsed_ms=10,
+        steps=2,
+        token_usage={"total_tokens": 100},
+    )
+    return submission, item, run
 
 
 class _CollectingPublisher(ResultPublisher):
@@ -149,6 +179,31 @@ class KafkaPublisherTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(publisher.status()["requestedBackend"], "kafak")
         self.assertTrue(publisher.status()["degraded"])
         self.assertIn("回退到 stdout", publisher.status()["reason"])
+
+
+class EventPayloadTests(unittest.TestCase):
+    def test_item_event_includes_goal_and_failure_reason(self) -> None:
+        from aiweb.notifications.events import build_item_terminal_event
+
+        submission, item, run = _event_models(
+            state="failed",
+            status_reason="run_failed",
+            fail_reason="element not found",
+        )
+        event = build_item_terminal_event(submission=submission, item=item, run=run)
+        self.assertEqual(event["goal"], item.run_content)
+        self.assertEqual(event["failureReason"], "element not found")
+
+    def test_success_event_has_no_failure_reason(self) -> None:
+        from aiweb.notifications.events import build_item_terminal_event
+
+        submission, item, run = _event_models(
+            state="success",
+            status_reason="run_success",
+            fail_reason="ignored stale value",
+        )
+        event = build_item_terminal_event(submission=submission, item=item, run=run)
+        self.assertIsNone(event["failureReason"])
 
 
 class HealthContractTests(unittest.IsolatedAsyncioTestCase):

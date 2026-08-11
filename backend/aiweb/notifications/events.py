@@ -18,6 +18,13 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def build_item_terminal_event(*, submission: Submission, item: Item, run: Run | None) -> dict:
+    failure_reason = None
+    if item.state != "success":
+        failure_reason = (
+            (str(run.fail_reason or "").strip() if run else "")
+            or str(item.status_reason or "").strip()
+            or None
+        )
     return {
         "event": ITEM_TERMINAL_EVENT,
         "version": EVENT_VERSION,
@@ -29,8 +36,10 @@ def build_item_terminal_event(*, submission: Submission, item: Item, run: Run | 
         "caseName": item.case_name or item.case_id,
         "platform": item.platform,
         "engine": "web-vlm" if run else None,
+        "goal": item.run_content,
         "state": item.state,
         "statusReason": item.status_reason,
+        "failureReason": failure_reason,
         "runId": run.id if run else None,
         "retryMax": item.retry_max,
         "attempts": item.attempts,
